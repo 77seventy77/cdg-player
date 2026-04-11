@@ -1,0 +1,15 @@
+[package]
+name = "cdg-player"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+byteorder = "1"
+dirs = "5"
+eframe = "0.31"
+egui = "0.31"
+hound = "3"
+rfd = "0.15"
+rodio = { version = "0.19", default-features = false, features = ["wav"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.20", default-features = false }
