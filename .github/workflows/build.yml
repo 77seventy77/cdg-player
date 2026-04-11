@@ -132,43 +132,6 @@ jobs:
           name: CDG-Player-Windows
           path: CDG-Player-Windows.zip
 
-  # ── Linux (Flatpak) ───────────────────────────────────────────────────────────
-  build-flatpak:
-    name: Linux (Flatpak)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4.2.2
-
-      - name: Install flatpak and flatpak-builder
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y flatpak flatpak-builder xvfb
-          sudo flatpak remote-add --if-not-exists flathub \
-            https://dl.flathub.org/repo/flathub.flatpakrepo
-
-      - name: Install Python deps for cargo generator
-        run: pip3 install aiohttp toml tomlkit
-
-      - name: Generate Cargo sources
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py \
-            -o flatpak-cargo-generator.py
-          python3 flatpak-cargo-generator.py Cargo.lock -o packaging/generated-sources.json
-
-      - name: Build Flatpak
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
-        with:
-          bundle: CDG-Player-Linux.flatpak
-          manifest-path: packaging/com.77seventy77.CDGPlayer.yml
-          cache-key: flatpak-builder-${{ github.sha }}
-          upload-artifact: false
-
-      - uses: actions/upload-artifact@v4.6.2
-        with:
-          name: CDG-Player-Flatpak
-          path: CDG-Player-Linux.flatpak
-
   # ── Linux (AppImage) ──────────────────────────────────────────────────────────
   build-linux:
     name: Linux (AppImage)
