@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -96,7 +96,7 @@ jobs:
       - name: Package
         run: zip -r "CDG-Player-macOS.zip" "CDG Player.app"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.6.2
         with:
           name: CDG-Player-macOS
           path: CDG-Player-macOS.zip
@@ -107,7 +107,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -124,7 +124,7 @@ jobs:
           Copy-Item "target\release\cdg-player.exe" "CDG Player\CDG Player.exe"
           Compress-Archive -Path "CDG Player" -DestinationPath "CDG-Player-Windows.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4.6.2
         with:
           name: CDG-Player-Windows
           path: CDG-Player-Windows.zip
@@ -139,11 +139,11 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4.2.1
         with:
           name: CDG-Player-macOS
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4.2.1
         with:
           name: CDG-Player-Windows
 
@@ -153,6 +153,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --title "CDG Player ${{ github.ref_name }}" \
             --generate-notes \
+            --clobber \
             "CDG-Player-macOS.zip" \
             "CDG-Player-Windows.zip"
         env:
