@@ -20,6 +20,7 @@
     <category>Player</category>
   </categories>
   <releases>
+    <release version="1.0.1" date="2026-04-16"/>
     <release version="1.0.0" date="2026-04-11"/>
   </releases>
   <content_rating type="oars-1.1"/>

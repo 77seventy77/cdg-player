@@ -321,7 +321,10 @@ impl CdegScreen {
         let is_256color = matches!(self.display_mode, DisplayMode::Color256);
 
         // The first two Item 2 CLUT commands (instructions 16 and 17, i.e. start == 0 or 8)
-        // are accepted in *any* display mode so that dissolve effects work on CDG-only decoders.
+        // are mode 2 commands deliberately chosen because CDG decoders ignore them entirely.
+        // On CD+EG, they drive dissolve/cross-fade effects by manipulating the primary and
+        // secondary 16-colour palettes — the only case where a command does something on
+        // CD+EG that is a no-op on CDG (rather than the usual reverse).
         let is_early_clut = matches!(
             pkt.instruction,
             CdegInstruction::LoadClut256High { start: 0 | 8 }
@@ -339,7 +342,8 @@ impl CdegScreen {
 
             CdegInstruction::LoadClut256High { start } => {
                 if !is_256color {
-                    // Act on the 16-color CLUTs instead (dissolve / cross-fade support).
+                    // Not 256-colour mode: apply to the 16-colour primary/secondary palettes
+                    // to produce the dissolve/cross-fade effect intended by the disc author.
                     let base = start as usize; // 0 or 8
                     if matches!(self.write_mode, WriteMode::Primary | WriteMode::Both) {
                         self.primary.load_clut(&pkt.data, base);
