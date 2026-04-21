@@ -188,7 +188,8 @@ impl Drop for App {
 }
 
 impl App {
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        setup_fonts(&cc.egui_ctx);
         let config = Config::load();
         let library = config.library_path.as_deref()
             .map(scan_library).unwrap_or_default();
@@ -265,16 +266,20 @@ impl App {
         }
 
         let cdg = cue_path.with_extension("cdg");
-        let cdg_path = if cdg.exists() {
-            Some(cdg)
-        } else {
-            // CDG file name doesn't match the cue — find any .cdg in the same folder.
-            cue_path.parent().and_then(|dir| {
-                std::fs::read_dir(dir).ok()?.flatten().find(|e| {
-                    e.path().extension().and_then(|x| x.to_str())
-                        .map_or(false, |x| x.eq_ignore_ascii_case("cdg"))
-                }).map(|e| e.path())
-            })
+        let cdg_path = {
+            // Resolve the CDG path, then discard it if the file is empty.
+            let candidate = if cdg.exists() {
+                Some(cdg)
+            } else {
+                // CDG file name doesn't match the cue — find any .cdg in the same folder.
+                cue_path.parent().and_then(|dir| {
+                    std::fs::read_dir(dir).ok()?.flatten().find(|e| {
+                        e.path().extension().and_then(|x| x.to_str())
+                            .map_or(false, |x| x.eq_ignore_ascii_case("cdg"))
+                    }).map(|e| e.path())
+                })
+            };
+            candidate.filter(|p| p.metadata().map(|m| m.len() > 0).unwrap_or(false))
         };
 
         self.cdg_path = cdg_path;
@@ -528,7 +533,7 @@ impl eframe::App for App {
                     ui.allocate_ui_with_layout(avail, egui::Layout::top_down(egui::Align::Center), |ui| {
                         ui.add_space(avail.y * 0.4);
                         ui.label(
-                            egui::RichText::new("A .cdg file is required to display graphics.")
+                            egui::RichText::new("Playing audio only — no graphics data on this disc.")
                                 .size(15.0)
                                 .color(egui::Color32::GRAY),
                         );
@@ -569,7 +574,7 @@ impl eframe::App for App {
                         avail,
                         egui::Layout::top_down(egui::Align::Center),
                         |ui| {
-                            ui.add_space(avail.y * 0.15);
+                            ui.add_space(20.0);
                             if self.config.library_path.is_none() {
                                 ui.label(
                                     egui::RichText::new("No library set")
@@ -594,8 +599,7 @@ impl eframe::App for App {
                                 ui.add_space(6.0);
                                 ui.label(
                                     egui::RichText::new(
-                                        "No sub-folders containing .cue files were found.\n\
-                                         Check the library location in ⚙ Settings."
+                                        "Click the \"Set Library\" button to select your disc image folder."
                                     )
                                     .size(14.0)
                                     .color(egui::Color32::GRAY),
@@ -677,6 +681,40 @@ impl eframe::App for App {
 
 // ── Archive extraction ────────────────────────────────────────────────────────
 
+/// Strip non-ASCII characters from a filename stem, keeping the extension.
+/// Used to ensure .cue FILE references and actual filenames always match,
+/// regardless of NFC/NFD or encoding differences in the archive.
+fn sanitize_filename(name: &str) -> String {
+    let p = Path::new(name);
+    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let stem: String = p.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(name)
+        .chars()
+        .filter(|c| c.is_ascii())
+        .collect();
+    if ext.is_empty() { stem } else { format!("{stem}.{ext}") }
+}
+
+/// Rewrite FILE references in a .cue sheet to use sanitized filenames.
+fn sanitize_cue(content: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(content);
+    let result = text.lines().map(|line| {
+        let trimmed = line.trim();
+        if trimmed.to_ascii_uppercase().starts_with("FILE ") {
+            if let (Some(s), Some(e)) = (line.find('"'), line.rfind('"')) {
+                if s < e {
+                    let original = &line[s+1..e];
+                    let sanitized = sanitize_filename(original);
+                    return format!("{}{}{}", &line[..s+1], sanitized, &line[e..]);
+                }
+            }
+        }
+        line.to_string()
+    }).collect::<Vec<_>>().join("\n");
+    result.into_bytes()
+}
+
 /// Extract disc-relevant files (.cue, .bin, .cdg) from a ZIP archive into a
 /// temporary directory.  Works for both regular ZIPs and TorrentZip (STORED).
 /// Returns `(temp_dir, cue_path)` on success.
@@ -712,16 +750,20 @@ fn extract_disc_zip(zip_path: &Path) -> Result<(PathBuf, PathBuf), String> {
             return Err("CD+G Player supports uncompressed archives only.".to_string());
         }
 
-        // Strip any path prefix — flatten everything into temp_dir.
         let file_name = Path::new(&name)
             .file_name()
-            .ok_or_else(|| format!("Bad entry name: {name}"))?;
-        let out_path = temp_dir.join(file_name);
+            .ok_or_else(|| format!("Bad entry name: {name}"))?
+            .to_string_lossy();
 
         let mut buf = Vec::with_capacity(entry.size() as usize);
         entry.read_to_end(&mut buf)
             .map_err(|e| format!("Failed to read {name} from ZIP: {e}"))?;
-        std::fs::write(&out_path, &buf)
+
+        // Sanitize the on-disk filename and rewrite .cue FILE refs to match.
+        let sanitized = sanitize_filename(&file_name);
+        let out_path = temp_dir.join(&sanitized);
+        let data = if lower.ends_with(".cue") { sanitize_cue(&buf) } else { buf };
+        std::fs::write(&out_path, &data)
             .map_err(|e| format!("Failed to write {name}: {e}"))?;
 
         if lower.ends_with(".cue") {
@@ -771,14 +813,22 @@ fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
             std::io::copy(source, &mut std::io::sink())?; // must consume reader
             return Ok(true);
         }
-        // Flatten any folder prefix inside the archive.
+        // Flatten any folder prefix and sanitize the filename.
         let file_name = Path::new(entry.name())
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new(entry.name()))
-            .to_owned();
-        let out_path = temp_dir.join(&file_name);
-        let mut out = std::fs::File::create(&out_path)?;
-        std::io::copy(source, &mut out)?;
+            .to_string_lossy()
+            .into_owned();
+        let sanitized = sanitize_filename(&file_name);
+        let out_path = temp_dir.join(&sanitized);
+        if name.ends_with(".cue") {
+            let mut buf = Vec::new();
+            std::io::copy(source, &mut buf)?;
+            std::fs::write(&out_path, sanitize_cue(&buf))?;
+        } else {
+            let mut out = std::fs::File::create(&out_path)?;
+            std::io::copy(source, &mut out)?;
+        }
         Ok(true)
     })
     .map_err(|e| format!("7z extraction failed: {e}"))?;
@@ -829,6 +879,41 @@ fn app_icon() -> egui::IconData {
     }
 
     egui::IconData { rgba, width, height }
+}
+
+fn setup_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Each entry: (key, path). All that exist are loaded as fallbacks in order,
+    // so the first covers Latin extended, the second covers CJK, etc.
+    #[cfg(target_os = "macos")]
+    let candidates: &[(&str, &str)] = &[
+        ("latin_ext", "/System/Library/Fonts/Helvetica.ttc"),
+        ("cjk",       "/System/Library/Fonts/PingFang.ttc"),
+    ];
+    #[cfg(target_os = "windows")]
+    let candidates: &[(&str, &str)] = &[
+        ("latin_ext", "C:\\Windows\\Fonts\\segoeui.ttf"),
+        ("cjk",       "C:\\Windows\\Fonts\\msgothic.ttc"),
+    ];
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let candidates: &[(&str, &str)] = &[
+        ("latin_ext", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("latin_ext2","/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        ("cjk",       "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        ("cjk2",      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    ];
+
+    for (key, path) in candidates {
+        if let Ok(data) = std::fs::read(path) {
+            fonts.font_data.insert((*key).to_owned(), egui::FontData::from_owned(data).into());
+            for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+                fonts.families.entry(family).or_default().push((*key).to_owned());
+            }
+        }
+    }
+
+    ctx.set_fonts(fonts);
 }
 
 fn main() {

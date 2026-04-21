@@ -32,10 +32,13 @@ impl Track {
 
     /// Load this track's audio as interleaved i16 samples (L, R, …).
     pub fn load_audio(&self) -> Vec<i16> {
-        let data = std::fs::read(&self.bin_path).unwrap_or_else(|e| {
-            eprintln!("Cannot read {:?}: {e}", self.bin_path);
-            std::process::exit(1);
-        });
+        let data = match std::fs::read(&self.bin_path) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Cannot read {:?}: {e}", self.bin_path);
+                return Vec::new();
+            }
+        };
         let start = self.bin_audio_offset as usize;
         let end = (start + self.sectors as usize * SECTOR_BYTES).min(data.len());
         if start >= data.len() {
@@ -52,10 +55,13 @@ impl Track {
 
 /// Parse a .cue sheet and return all audio tracks with absolute sector info.
 pub fn parse_cue(cue_path: &Path) -> Vec<Track> {
-    let text = std::fs::read_to_string(cue_path).unwrap_or_else(|e| {
-        eprintln!("Cannot read cue file {:?}: {e}", cue_path);
-        std::process::exit(1);
-    });
+    let text = match std::fs::read_to_string(cue_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Cannot read cue file {:?}: {e}", cue_path);
+            return Vec::new();
+        }
+    };
     let cue_dir = cue_path.parent().unwrap_or(Path::new("."));
 
     // --- first pass: collect raw entries ----
@@ -101,10 +107,40 @@ pub fn parse_cue(cue_path: &Path) -> Vec<Track> {
 
             if let Some(name) = extract_quoted(trimmed) {
                 let path = cue_dir.join(name);
-                let size = std::fs::metadata(&path)
+                // If the exact path doesn't exist, try progressively looser matches
+                // to handle Unicode encoding/normalization mismatches between the
+                // .cue content and the actual extracted filenames.
+                let resolved = if path.exists() {
+                    path
+                } else {
+                    let bins: Vec<_> = std::fs::read_dir(cue_dir)
+                        .map(|rd| rd.flatten()
+                            .filter(|e| e.path().extension()
+                                .and_then(|x| x.to_str())
+                                .map_or(false, |x| x.eq_ignore_ascii_case("bin")))
+                            .collect())
+                        .unwrap_or_default();
+
+                    // Pass 1: ASCII-fold match (handles NFC vs NFD).
+                    let ascii_key = ascii_fold(name);
+                    let matched = bins.iter().find(|e| {
+                        ascii_fold(&e.file_name().to_string_lossy()) == ascii_key
+                    });
+
+                    // Pass 2: match by track number embedded in the filename.
+                    let matched = matched.or_else(|| {
+                        let n = track_num_from_name(name)?;
+                        bins.iter().find(|e| {
+                            track_num_from_name(&e.file_name().to_string_lossy()) == Some(n)
+                        })
+                    });
+
+                    matched.map(|e| e.path()).unwrap_or(path)
+                };
+                let size = std::fs::metadata(&resolved)
                     .map(|m| m.len() / SECTOR_BYTES as u64)
                     .unwrap_or(0);
-                cur_bin = Some((path, size));
+                cur_bin = Some((resolved, size));
             }
         } else if upper.starts_with("TRACK ") {
             if cur_number != 0 {
@@ -168,4 +204,23 @@ fn extract_quoted(line: &str) -> Option<&str> {
     let start = line.find('"')? + 1;
     let end = line[start..].find('"')? + start;
     Some(&line[start..end])
+}
+
+/// Lowercase and keep only ASCII characters.
+/// Used to compare filenames that may differ in Unicode encoding/normalization.
+fn ascii_fold(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| if c.is_ascii() { Some(c.to_ascii_lowercase()) } else { None })
+        .collect()
+}
+
+/// Extract the track number from a filename containing "(Track N)" or "Track N".
+fn track_num_from_name(s: &str) -> Option<u32> {
+    let lower = s.to_lowercase();
+    let pos = lower.find("track")?;
+    let rest = lower[pos + 5..].trim_start_matches(|c: char| !c.is_ascii_digit());
+    rest.chars().take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .ok()
 }
