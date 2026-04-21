@@ -619,26 +619,43 @@ impl eframe::App for App {
                                             (d.title.clone(), src)
                                         })
                                         .collect();
+
+                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    let pad = egui::vec2(12.0, 8.0);
+                                    let font_id = egui::FontId::proportional(15.0);
+
                                     for (title, source) in entries {
                                         let avail_w = ui.available_width();
-                                        let resp = ui.add_sized(
-                                            [avail_w, 28.0],
-                                            egui::Button::new(
-                                                egui::RichText::new(&title)
-                                                    .size(15.0)
-                                                    .color(egui::Color32::WHITE),
-                                            )
-                                            .fill(egui::Color32::TRANSPARENT)
-                                            .frame(false)
-                                            .wrap_mode(egui::TextWrapMode::Truncate),
+
+                                        // Measure wrapped text so the row height is exact.
+                                        let galley = ui.fonts(|f| f.layout(
+                                            title.clone(),
+                                            font_id.clone(),
+                                            egui::Color32::WHITE,
+                                            avail_w - pad.x * 2.0,
+                                        ));
+                                        let row_h = galley.size().y + pad.y * 2.0;
+
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(avail_w, row_h),
+                                            egui::Sense::click(),
                                         );
-                                        if resp.hovered() {
-                                            ui.painter().rect_filled(
-                                                resp.rect,
-                                                4.0,
-                                                egui::Color32::from_rgba_unmultiplied(255,255,255,20),
+
+                                        if ui.is_rect_visible(rect) {
+                                            if resp.hovered() {
+                                                ui.painter().rect_filled(
+                                                    rect,
+                                                    6.0,
+                                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25),
+                                                );
+                                            }
+                                            ui.painter().galley(
+                                                rect.min + pad,
+                                                galley,
+                                                egui::Color32::WHITE,
                                             );
                                         }
+
                                         if resp.clicked() {
                                             match source {
                                                 DiscSource::Cue(p)    => self.load_cue(p),
