@@ -45,7 +45,10 @@ impl Player {
     fn new(track: &cue::Track, cdg_path: &PathBuf, cdeg_enabled: bool) -> Self {
         let cdg_raw  = std::fs::read(cdg_path).unwrap_or_default();
         let cdg_offset = track.cdg_offset() as usize;
-        let cdg_data = &cdg_raw[cdg_offset.min(cdg_raw.len())..];
+        // Limit CDG data to this track's sectors only (4 packets × 24 bytes each).
+        let cdg_end = (cdg_offset + track.sectors as usize * 4 * cdg::PACKET_SIZE)
+            .min(cdg_raw.len());
+        let cdg_data = &cdg_raw[cdg_offset.min(cdg_raw.len())..cdg_end];
         let packets: Vec<_> = PacketIter::new(cdg_data).collect();
         let total = packets.len();
 
