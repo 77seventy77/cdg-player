@@ -887,24 +887,67 @@ fn app_icon() -> egui::IconData {
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    // Each entry: (key, path). All that exist are loaded as fallbacks in order,
-    // so the first covers Latin extended, the second covers CJK, etc.
+    // Each entry: (key, path). Missing paths are silently skipped.
+    // Fonts are appended as fallbacks in order, so egui tries each in turn
+    // before rendering a missing-glyph box.
     #[cfg(target_os = "macos")]
     let candidates: &[(&str, &str)] = &[
-        ("latin_ext", "/System/Library/Fonts/Helvetica.ttc"),
-        ("cjk",       "/System/Library/Fonts/PingFang.ttc"),
+        ("latin_ext",  "/System/Library/Fonts/Helvetica.ttc"),
+        ("cjk",        "/System/Library/Fonts/PingFang.ttc"),
+        ("arabic",     "/System/Library/Fonts/GeezaPro.ttc"),
+        ("thai",       "/System/Library/Fonts/Thonburi.ttf"),
+        ("devanagari", "/System/Library/Fonts/Kohinoor.ttc"),
+        ("hebrew",     "/System/Library/Fonts/Supplemental/Arial Hebrew.ttf"),
+        ("armenian",   "/System/Library/Fonts/Supplemental/Mshtakan.ttf"),
+        ("georgian",   "/System/Library/Fonts/Supplemental/BPG.ttf"),
+        ("tibetan",    "/System/Library/Fonts/Supplemental/Kailasa.ttf"),
+        ("myanmar",    "/System/Library/Fonts/Supplemental/Myanmar MN.ttc"),
+        ("khmer",      "/System/Library/Fonts/Supplemental/Khmer MN.ttc"),
+        ("lao",        "/System/Library/Fonts/Supplemental/Lao MN.ttf"),
+        ("sinhala",    "/System/Library/Fonts/Supplemental/Sinhala MN.ttc"),
     ];
     #[cfg(target_os = "windows")]
     let candidates: &[(&str, &str)] = &[
-        ("latin_ext", "C:\\Windows\\Fonts\\segoeui.ttf"),
-        ("cjk",       "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("latin_ext",  "C:\\Windows\\Fonts\\segoeui.ttf"),
+        ("cjk",        "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("arabic",     "C:\\Windows\\Fonts\\arial.ttf"),    // covers Arabic + Hebrew
+        ("thai",       "C:\\Windows\\Fonts\\tahoma.ttf"),
+        ("devanagari", "C:\\Windows\\Fonts\\mangal.ttf"),
+        ("tamil",      "C:\\Windows\\Fonts\\latha.ttf"),
+        ("telugu",     "C:\\Windows\\Fonts\\gautami.ttf"),
+        ("kannada",    "C:\\Windows\\Fonts\\tunga.ttf"),
+        ("malayalam",  "C:\\Windows\\Fonts\\kartika.ttf"),
+        ("sinhala",    "C:\\Windows\\Fonts\\iskpota.ttf"),
+        ("myanmar",    "C:\\Windows\\Fonts\\mmrtext.ttf"),
+        ("ethiopic",   "C:\\Windows\\Fonts\\nyala.ttf"),
+        ("georgian",   "C:\\Windows\\Fonts\\sylfaen.ttf"),
+        ("armenian",   "C:\\Windows\\Fonts\\sylfaen.ttf"),
+        ("khmer",      "C:\\Windows\\Fonts\\leelawad.ttf"),
     ];
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let candidates: &[(&str, &str)] = &[
-        ("latin_ext", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        ("latin_ext2","/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
-        ("cjk",       "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-        ("cjk2",      "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        ("latin_ext",   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("latin_ext2",  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+        ("cjk",         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        ("cjk2",        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        ("arabic",      "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
+        ("arabic2",     "/usr/share/fonts/truetype/arabic/NotoNaskhArabic-Regular.ttf"),
+        ("hebrew",      "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf"),
+        ("devanagari",  "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"),
+        ("thai",        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"),
+        ("tamil",       "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf"),
+        ("telugu",      "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf"),
+        ("kannada",     "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf"),
+        ("malayalam",   "/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf"),
+        ("bengali",     "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf"),
+        ("sinhala",     "/usr/share/fonts/truetype/noto/NotoSansSinhala-Regular.ttf"),
+        ("myanmar",     "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf"),
+        ("khmer",       "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf"),
+        ("lao",         "/usr/share/fonts/truetype/noto/NotoSansLao-Regular.ttf"),
+        ("tibetan",     "/usr/share/fonts/truetype/noto/NotoSansTibetan-Regular.ttf"),
+        ("ethiopic",    "/usr/share/fonts/truetype/noto/NotoSansEthiopic-Regular.ttf"),
+        ("georgian",    "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf"),
+        ("armenian",    "/usr/share/fonts/truetype/noto/NotoSansArmenian-Regular.ttf"),
     ];
 
     for (key, path) in candidates {
