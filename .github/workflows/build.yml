@@ -127,12 +127,22 @@ jobs:
         run: |
           choco install ffmpeg --yes --no-progress
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
-          $ffmpegExe = Get-ChildItem "C:\ProgramData\chocolatey\lib" -Recurse -Filter ffmpeg.exe |
-            Where-Object { $_.FullName -notmatch '\\bin\\' } |
+
+          $ffmpegRoot = "C:\ProgramData\chocolatey\lib\ffmpeg\tools"
+          $ffmpegExe = Get-ChildItem $ffmpegRoot -Recurse -Filter ffmpeg.exe -File |
+            Where-Object { $_.FullName -match '\\bin\\ffmpeg\.exe$' } |
             Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $ffmpegExe) {
+            $ffmpegExe = Get-ChildItem $ffmpegRoot -Recurse -Filter ffmpeg.exe -File |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+
           if (-not $ffmpegExe) {
             throw "Could not locate installed ffmpeg.exe"
           }
+
+          Write-Host "Bundling ffmpeg from $ffmpegExe"
           Copy-Item $ffmpegExe "bundle\ffmpeg.exe"
 
       - name: Install WiX Toolset
