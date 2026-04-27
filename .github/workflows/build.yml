@@ -25,8 +25,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install ffmpeg
-        run: brew install ffmpeg
+      - name: Download bundled ffmpeg
+        run: |
+          curl -fsSL "https://www.osxexperts.net/ffmpeg81arm.zip" -o ffmpeg-macos.zip
+          unzip -j ffmpeg-macos.zip -d bundled-ffmpeg
+          chmod +x bundled-ffmpeg/ffmpeg
+          xattr -cr bundled-ffmpeg/ffmpeg || true
+          codesign --force --sign - bundled-ffmpeg/ffmpeg
 
       - name: Build arm64
         run: cargo build --release --target aarch64-apple-darwin
@@ -39,7 +44,7 @@ jobs:
 
           cp target/aarch64-apple-darwin/release/cdg-player "$APP/Contents/MacOS/cdg-player"
           chmod +x "$APP/Contents/MacOS/cdg-player"
-          cp "$(brew --prefix)/bin/ffmpeg" "$APP/Contents/MacOS/ffmpeg"
+          cp bundled-ffmpeg/ffmpeg "$APP/Contents/MacOS/ffmpeg"
           chmod +x "$APP/Contents/MacOS/ffmpeg"
 
           python3 - "$APP/Contents/Info.plist" << 'PYEOF'
@@ -237,10 +242,18 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev libasound2-dev \
-            fuse libfuse2 imagemagick ffmpeg
+            fuse libfuse2 imagemagick
 
       - name: Build
         run: cargo build --release
+
+      - name: Download bundled ffmpeg
+        run: |
+          curl -fsSL "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz" -o ffmpeg-linux.tar.xz
+          tar -xf ffmpeg-linux.tar.xz
+          mkdir -p bundled-ffmpeg
+          cp ffmpeg-*-amd64-static/ffmpeg bundled-ffmpeg/ffmpeg
+          chmod +x bundled-ffmpeg/ffmpeg
 
       - name: Build AppImage
         run: |
@@ -258,7 +271,7 @@ jobs:
           mkdir -p AppDir/usr/share/icons/hicolor/512x512/apps
 
           cp target/release/cdg-player AppDir/usr/bin/cdg-player
-          cp /usr/bin/ffmpeg AppDir/usr/bin/ffmpeg
+          cp bundled-ffmpeg/ffmpeg AppDir/usr/bin/ffmpeg
           cp packaging/com.77seventy77.CDGPlayer.desktop AppDir/usr/share/applications/
           cp icon-512.png AppDir/usr/share/icons/hicolor/512x512/apps/com.77seventy77.CDGPlayer.png
 

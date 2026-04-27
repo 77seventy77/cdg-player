@@ -9,10 +9,15 @@ use crate::cdg::{AnyPacket, PacketIter};
 use crate::cue::Track;
 use crate::renderer::{CdegScreen, HEIGHT, WIDTH};
 use std::io::Write;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub const EXPORT_FPS: u32 = 30;
 const PACKETS_PER_FRAME: usize = (300 / EXPORT_FPS) as usize; // 10
@@ -161,7 +166,8 @@ fn run_export(
         .cloned()
         .unwrap_or_else(|| PathBuf::from(ffmpeg_binary_name()));
 
-    let mut child = Command::new(&ffmpeg)
+    let mut command = Command::new(&ffmpeg);
+    command
         .args([
             "-y",
             "-f",
@@ -196,7 +202,12 @@ fn run_export(
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
         .spawn()
         .map_err(|e| {
             let searched = ffmpeg_candidates
