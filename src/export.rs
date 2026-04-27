@@ -153,7 +153,12 @@ fn run_export(
     // Output: AV1 + FLAC in MKV
     let size_str = format!("{}x{}", WIDTH, HEIGHT);
     let fps_str = EXPORT_FPS.to_string();
-    let ffmpeg = find_ffmpeg();
+    let ffmpeg_candidates = ffmpeg_candidates();
+    let ffmpeg = ffmpeg_candidates
+        .iter()
+        .find(|candidate| candidate.is_file())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(ffmpeg_binary_name()));
 
     let mut child = Command::new(&ffmpeg)
         .args([
@@ -193,9 +198,15 @@ fn run_export(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
+            let searched = ffmpeg_candidates
+                .iter()
+                .map(|candidate| candidate.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             format!(
-                "Failed to spawn ffmpeg at {}: {e}\nInstall ffmpeg and make sure it is available to the app.",
-                ffmpeg.display()
+                "Failed to spawn ffmpeg at {}: {e}\nSearched: {}\nInstall ffmpeg and make sure it is available to the app.",
+                ffmpeg.display(),
+                searched
             )
         })?;
 
@@ -290,39 +301,38 @@ fn sanitize_output_stem(stem: &str) -> String {
     }
 }
 
-fn find_ffmpeg() -> PathBuf {
+fn ffmpeg_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
     if let Some(path) = std::env::var_os("FFMPEG") {
         let path = PathBuf::from(path);
-        if path.is_file() {
-            return path;
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+
+    for candidate in ffmpeg_local_candidates() {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
         }
     }
 
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join(ffmpeg_binary_name());
-            if candidate.is_file() {
-                return candidate;
-            }
-        }
-    }
-
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            let candidate = dir.join(ffmpeg_binary_name());
-            if candidate.is_file() {
-                return candidate;
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
             }
         }
     }
 
     for candidate in ffmpeg_fallback_locations() {
-        if candidate.is_file() {
-            return candidate;
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
         }
     }
 
-    PathBuf::from(ffmpeg_binary_name())
+    candidates
 }
 
 fn ffmpeg_binary_name() -> &'static str {
@@ -334,6 +344,25 @@ fn ffmpeg_binary_name() -> &'static str {
     {
         "ffmpeg"
     }
+}
+
+fn ffmpeg_local_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join(ffmpeg_binary_name()));
+        candidates.push(current_dir.join("bundle").join(ffmpeg_binary_name()));
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            candidates.push(dir.join(ffmpeg_binary_name()));
+            candidates.push(dir.join("bundle").join(ffmpeg_binary_name()));
+            candidates.push(dir.join("ffmpeg").join(ffmpeg_binary_name()));
+        }
+    }
+
+    candidates
 }
 
 fn ffmpeg_fallback_locations() -> Vec<PathBuf> {
