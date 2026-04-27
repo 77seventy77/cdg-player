@@ -10,6 +10,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  APP_VERSION: 1.0.4
 
 jobs:
 
@@ -41,7 +42,7 @@ jobs:
 
       - name: Build .app bundle
         run: |
-          APP="CDG Player.app"
+          APP="CD+G Player.app"
           mkdir -p "$APP/Contents/MacOS"
           mkdir -p "$APP/Contents/Resources"
 
@@ -60,13 +61,13 @@ jobs:
             <key>CFBundleIdentifier</key>
             <string>com.77seventy77.cdg-player</string>
             <key>CFBundleName</key>
-            <string>CDG Player</string>
+            <string>CD+G Player</string>
             <key>CFBundleDisplayName</key>
-            <string>CDG Player</string>
+            <string>CD+G Player</string>
             <key>CFBundleVersion</key>
-            <string>1.0</string>
+            <string>${{ env.APP_VERSION }}</string>
             <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
+            <string>${{ env.APP_VERSION }}</string>
             <key>CFBundleIconFile</key>
             <string>AppIcon</string>
             <key>NSHighResolutionCapable</key>
@@ -94,15 +95,15 @@ jobs:
           iconutil -c icns AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 
       - name: Ad-hoc code sign
-        run: codesign --deep --force --sign - "CDG Player.app"
+        run: codesign --deep --force --sign - "CD+G Player.app"
 
       - name: Package
-        run: zip -r "CDG-Player-macOS.zip" "CDG Player.app"
+        run: zip -r "CD+G Player_macOS_v${{ env.APP_VERSION }}.zip" "CD+G Player.app"
 
       - uses: actions/upload-artifact@v4.6.2
         with:
-          name: CDG-Player-macOS
-          path: CDG-Player-macOS.zip
+          name: CD+G Player_macOS_v${{ env.APP_VERSION }}.zip
+          path: CD+G Player_macOS_v${{ env.APP_VERSION }}.zip
 
   # ── Windows ───────────────────────────────────────────────────────────────────
   build-windows:
@@ -121,16 +122,70 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Package
+      - name: Install WiX Toolset
         run: |
-          New-Item -ItemType Directory -Path "CDG Player"
-          Copy-Item "target\release\cdg-player.exe" "CDG Player\CDG Player.exe"
-          Compress-Archive -Path "CDG Player" -DestinationPath "CDG-Player-Windows.zip"
+          choco install wixtoolset --yes --no-progress
+          $wixBin = Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.11\bin"
+          $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build MSI
+        shell: pwsh
+        run: |
+          @'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product
+              Id="*"
+              Name="CD+G Player"
+              Language="1033"
+              Version="${{ env.APP_VERSION }}"
+              Manufacturer="77seventy77"
+              UpgradeCode="7F1794FA-5FC2-4F83-A0A0-6D7C7F9F1F04">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Platform="x64" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version of CD+G Player is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+              <Icon Id="AppIcon" SourceFile="Logo\CDG Logo.ico" />
+              <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="CD+G Player">
+                    <Component Id="MainExecutable" Guid="7580931F-26BF-4A3E-8F28-E57FEA5A4C54" Win64="yes">
+                      <File Id="CdgPlayerExe" Source="target\release\cdg-player.exe" KeyPath="yes" />
+                    </Component>
+                  </Directory>
+                </Directory>
+                <Directory Id="ProgramMenuFolder">
+                  <Directory Id="ApplicationProgramsFolder" Name="CD+G Player">
+                    <Component Id="ApplicationShortcut" Guid="A814507A-F7C2-48BD-83B0-6FEA098E53FE" Win64="yes">
+                      <Shortcut
+                        Id="ApplicationStartMenuShortcut"
+                        Name="CD+G Player"
+                        Description="CD+G and CD+EG karaoke disc player"
+                        Target="[INSTALLFOLDER]cdg-player.exe"
+                        WorkingDirectory="INSTALLFOLDER" />
+                      <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+                      <RegistryValue Root="HKLM" Key="Software\77seventy77\CDGPlayer" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                    </Component>
+                  </Directory>
+                </Directory>
+              </Directory>
+
+              <Feature Id="Complete" Level="1">
+                <ComponentRef Id="MainExecutable" />
+                <ComponentRef Id="ApplicationShortcut" />
+              </Feature>
+            </Product>
+          </Wix>
+          '@ | Set-Content -Path installer.wxs
+
+          candle installer.wxs
+          light -sval installer.wixobj -o "CD+G Player_Windows_v${{ env.APP_VERSION }}.msi"
 
       - uses: actions/upload-artifact@v4.6.2
         with:
-          name: CDG-Player-Windows
-          path: CDG-Player-Windows.zip
+          name: CD+G Player_Windows_v${{ env.APP_VERSION }}.msi
+          path: CD+G Player_Windows_v${{ env.APP_VERSION }}.msi
 
   # ── Linux (AppImage) ──────────────────────────────────────────────────────────
   build-linux:
@@ -180,12 +235,12 @@ jobs:
             --icon-file icon-512.png \
             --output appimage
 
-          mv CDG_Player-*.AppImage CDG-Player-Linux.AppImage
+          mv ./*.AppImage "CD+G Player_Linux_v${{ env.APP_VERSION }}.AppImage"
 
       - uses: actions/upload-artifact@v4.6.2
         with:
-          name: CDG-Player-Linux
-          path: CDG-Player-Linux.AppImage
+          name: CD+G Player_Linux_v${{ env.APP_VERSION }}.AppImage
+          path: CD+G Player_Linux_v${{ env.APP_VERSION }}.AppImage
 
   # ── Release (tag pushes only) ─────────────────────────────────────────────────
   release:
@@ -199,15 +254,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4.2.1
         with:
-          name: CDG-Player-macOS
+          name: CD+G Player_macOS_v${{ env.APP_VERSION }}.zip
 
       - uses: actions/download-artifact@v4.2.1
         with:
-          name: CDG-Player-Windows
+          name: CD+G Player_Windows_v${{ env.APP_VERSION }}.msi
 
       - uses: actions/download-artifact@v4.2.1
         with:
-          name: CDG-Player-Linux
+          name: CD+G Player_Linux_v${{ env.APP_VERSION }}.AppImage
 
       - name: Create GitHub Release
         run: |
@@ -216,10 +271,10 @@ jobs:
             --yes 2>/dev/null || true
           gh release create "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
-            --title "CDG Player ${{ github.ref_name }}" \
+            --title "CD+G Player ${{ github.ref_name }}" \
             --generate-notes \
-            "CDG-Player-macOS.zip" \
-            "CDG-Player-Windows.zip" \
-            "CDG-Player-Linux.AppImage"
+            "CD+G Player_macOS_v${{ env.APP_VERSION }}.zip" \
+            "CD+G Player_Windows_v${{ env.APP_VERSION }}.msi" \
+            "CD+G Player_Linux_v${{ env.APP_VERSION }}.AppImage"
         env:
           GH_TOKEN: ${{ github.token }}

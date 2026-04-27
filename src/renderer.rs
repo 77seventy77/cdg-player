@@ -33,26 +33,26 @@ pub struct Screen {
 impl Screen {
     pub fn new() -> Self {
         Self {
-            pixels:       Box::new([0u8; WIDTH * HEIGHT]),
-            palette:      [0u32; 16],
+            pixels: Box::new([0u8; WIDTH * HEIGHT]),
+            palette: [0u32; 16],
             border_color: 0,
-            h_offset:     0,
-            v_offset:     0,
+            h_offset: 0,
+            v_offset: 0,
         }
     }
 
     /// Apply a standard CD+G packet to this plane's graphics state.
     pub fn apply(&mut self, packet: &Packet) {
         match packet.instruction {
-            Instruction::MemoryPreset       => self.memory_preset(packet),
-            Instruction::BorderPreset       => self.border_preset(packet),
-            Instruction::TileBlock          => self.tile_block(&packet.data, false),
-            Instruction::TileBlockXor       => self.tile_block(&packet.data, true),
-            Instruction::LoadColorTableLow  => self.load_clut(&packet.data, 0),
+            Instruction::MemoryPreset => self.memory_preset(packet),
+            Instruction::BorderPreset => self.border_preset(packet),
+            Instruction::TileBlock => self.tile_block(&packet.data, false),
+            Instruction::TileBlockXor => self.tile_block(&packet.data, true),
+            Instruction::LoadColorTableLow => self.load_clut(&packet.data, 0),
             Instruction::LoadColorTableHigh => self.load_clut(&packet.data, 8),
-            Instruction::ScrollPreset       => self.scroll(packet, false),
-            Instruction::ScrollCopy         => self.scroll(packet, true),
-            Instruction::DefineTransparent  => {}
+            Instruction::ScrollPreset => self.scroll(packet, false),
+            Instruction::ScrollCopy => self.scroll(packet, true),
+            Instruction::DefineTransparent => {}
         }
     }
 
@@ -60,18 +60,16 @@ impl Screen {
     /// The border zone is always filled with `border_color`; pixel buffer data there
     /// is preserved so it scrolls into the interior correctly.
     pub fn render(&self, out: &mut [u32]) {
-        let hoff      = self.h_offset as isize;
-        let voff      = self.v_offset as isize;
+        let hoff = self.h_offset as isize;
+        let voff = self.v_offset as isize;
         let border_rgb = self.palette[self.border_color as usize];
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                if y < BORDER_Y || y >= HEIGHT - BORDER_Y
-                    || x < BORDER_X || x >= WIDTH - BORDER_X
-                {
+                if y < BORDER_Y || y >= HEIGHT - BORDER_Y || x < BORDER_X || x >= WIDTH - BORDER_X {
                     out[y * WIDTH + x] = border_rgb;
                 } else {
-                    let sx  = (x as isize - hoff).rem_euclid(WIDTH  as isize) as usize;
-                    let sy  = (y as isize - voff).rem_euclid(HEIGHT as isize) as usize;
+                    let sx = (x as isize - hoff).rem_euclid(WIDTH as isize) as usize;
+                    let sy = (y as isize - voff).rem_euclid(HEIGHT as isize) as usize;
                     let idx = self.pixels[sy * WIDTH + sx] as usize;
                     out[y * WIDTH + x] = self.palette[idx];
                 }
@@ -90,21 +88,23 @@ impl Screen {
 
     /// Paint a tile using raw data bytes (Item 2 SetFont / XorFont share this format).
     pub(crate) fn tile_block(&mut self, data: &[u8; 16], xor: bool) {
-        let color0   = data[0] & 0x0F;
-        let color1   = data[1] & 0x0F;
+        let color0 = data[0] & 0x0F;
+        let color1 = data[1] & 0x0F;
         let tile_row = (data[2] & 0x1F) as usize;
         let tile_col = (data[3] & 0x3F) as usize;
 
         let base_x = tile_col * TILE_W;
         let base_y = tile_row * TILE_H;
-        if base_x + TILE_W > WIDTH || base_y + TILE_H > HEIGHT { return; }
+        if base_x + TILE_W > WIDTH || base_y + TILE_H > HEIGHT {
+            return;
+        }
 
         for row in 0..TILE_H {
             let byte = data[4 + row];
             for col in 0..TILE_W {
-                let bit   = (byte >> (5 - col)) & 0x01;
+                let bit = (byte >> (5 - col)) & 0x01;
                 let color = if bit == 0 { color0 } else { color1 };
-                let px    = &mut self.pixels[(base_y + row) * WIDTH + (base_x + col)];
+                let px = &mut self.pixels[(base_y + row) * WIDTH + (base_x + col)];
                 *px = if xor { *px ^ color } else { color };
             }
         }
@@ -113,14 +113,14 @@ impl Screen {
     /// Load 8 CLUT entries from raw data bytes (same layout as LoadColorTable commands).
     pub(crate) fn load_clut(&mut self, data: &[u8; 16], base: usize) {
         for i in 0..8 {
-            let hi  = data[i * 2]     & 0x3F;
-            let lo  = data[i * 2 + 1] & 0x3F;
-            let r4  = (hi >> 2) & 0x0F;
-            let g4  = ((hi & 0x03) << 2) | ((lo >> 4) & 0x03);
-            let b4  = lo & 0x0F;
-            let r   = (r4 * 17) as u32;
-            let g   = (g4 * 17) as u32;
-            let b   = (b4 * 17) as u32;
+            let hi = data[i * 2] & 0x3F;
+            let lo = data[i * 2 + 1] & 0x3F;
+            let r4 = (hi >> 2) & 0x0F;
+            let g4 = ((hi & 0x03) << 2) | ((lo >> 4) & 0x03);
+            let b4 = lo & 0x0F;
+            let r = (r4 * 17) as u32;
+            let g = (g4 * 17) as u32;
+            let b = (b4 * 17) as u32;
             self.palette[base + i] = (r << 16) | (g << 8) | b;
         }
     }
@@ -136,22 +136,22 @@ impl Screen {
     }
 
     fn scroll(&mut self, p: &Packet, wrap: bool) {
-        let h_cmd   = (p.data[1] >> 4) & 0x03;
-        let h_off   = (p.data[1] & 0x07) as i8;
-        let v_cmd   = (p.data[2] >> 4) & 0x03;
-        let v_off   = (p.data[2] & 0x0F) as i8;
-        let fill    = p.data[0] & 0x0F;
+        let h_cmd = (p.data[1] >> 4) & 0x03;
+        let h_off = (p.data[1] & 0x07) as i8;
+        let v_cmd = (p.data[2] >> 4) & 0x03;
+        let v_off = (p.data[2] & 0x0F) as i8;
+        let fill = p.data[0] & 0x0F;
 
         self.h_offset = h_off;
         self.v_offset = v_off;
 
         match h_cmd {
-            1 => self.scroll_h( TILE_W as isize, fill, wrap),
+            1 => self.scroll_h(TILE_W as isize, fill, wrap),
             2 => self.scroll_h(-(TILE_W as isize), fill, wrap),
             _ => {}
         }
         match v_cmd {
-            1 => self.scroll_v( TILE_H as isize, fill, wrap),
+            1 => self.scroll_v(TILE_H as isize, fill, wrap),
             2 => self.scroll_v(-(TILE_H as isize), fill, wrap),
             _ => {}
         }
@@ -161,10 +161,17 @@ impl Screen {
         let mut new = [0u8; WIDTH * HEIGHT];
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                let src_x     = (x as isize - delta).rem_euclid(WIDTH as isize) as usize;
-                let in_vacated = if delta > 0 { x < delta as usize }
-                                 else { x >= (WIDTH as isize + delta) as usize };
-                new[y * WIDTH + x] = if in_vacated && !wrap { fill } else { self.pixels[y * WIDTH + src_x] };
+                let src_x = (x as isize - delta).rem_euclid(WIDTH as isize) as usize;
+                let in_vacated = if delta > 0 {
+                    x < delta as usize
+                } else {
+                    x >= (WIDTH as isize + delta) as usize
+                };
+                new[y * WIDTH + x] = if in_vacated && !wrap {
+                    fill
+                } else {
+                    self.pixels[y * WIDTH + src_x]
+                };
             }
         }
         *self.pixels = new;
@@ -173,11 +180,18 @@ impl Screen {
     fn scroll_v(&mut self, delta: isize, fill: u8, wrap: bool) {
         let mut new = [0u8; WIDTH * HEIGHT];
         for y in 0..HEIGHT {
-            let src_y     = (y as isize - delta).rem_euclid(HEIGHT as isize) as usize;
-            let in_vacated = if delta > 0 { y < delta as usize }
-                             else { y >= (HEIGHT as isize + delta) as usize };
+            let src_y = (y as isize - delta).rem_euclid(HEIGHT as isize) as usize;
+            let in_vacated = if delta > 0 {
+                y < delta as usize
+            } else {
+                y >= (HEIGHT as isize + delta) as usize
+            };
             for x in 0..WIDTH {
-                new[y * WIDTH + x] = if in_vacated && !wrap { fill } else { self.pixels[src_y * WIDTH + x] };
+                new[y * WIDTH + x] = if in_vacated && !wrap {
+                    fill
+                } else {
+                    self.pixels[src_y * WIDTH + x]
+                };
             }
         }
         *self.pixels = new;
@@ -230,23 +244,23 @@ impl CdegColor {
 /// extended 256-entry CLUT.  When `cdeg_enabled` is false, Item 2 packets are
 /// ignored and the state behaves identically to a standard CD+G decoder.
 pub struct CdegScreen {
-    pub primary:      Screen,
-    pub secondary:    Screen,
-    pub write_mode:   WriteMode,
+    pub primary: Screen,
+    pub secondary: Screen,
+    pub write_mode: WriteMode,
     pub display_mode: DisplayMode,
     pub cdeg_enabled: bool,
-    clut256:          Box<[CdegColor; 256]>,
+    clut256: Box<[CdegColor; 256]>,
 }
 
 impl CdegScreen {
     pub fn new(cdeg_enabled: bool) -> Self {
         Self {
-            primary:      Screen::new(),
-            secondary:    Screen::new(),
-            write_mode:   WriteMode::Primary,
+            primary: Screen::new(),
+            secondary: Screen::new(),
+            write_mode: WriteMode::Primary,
             display_mode: DisplayMode::Primary,
             cdeg_enabled,
-            clut256:      Box::new([CdegColor::default(); 256]),
+            clut256: Box::new([CdegColor::default(); 256]),
         }
     }
 
@@ -265,10 +279,10 @@ impl CdegScreen {
     /// Render to a 32-bit 0x00RRGGBB framebuffer according to current display mode.
     pub fn render(&self, out: &mut [u32]) {
         match self.display_mode {
-            DisplayMode::Primary   => self.primary.render(out),
+            DisplayMode::Primary => self.primary.render(out),
             DisplayMode::Secondary => self.secondary.render(out),
-            DisplayMode::Color256  => self.render_256color(out),
-            DisplayMode::Mix       => self.render_mix(out),
+            DisplayMode::Color256 => self.render_256color(out),
+            DisplayMode::Mix => self.render_mix(out),
         }
     }
 
@@ -366,8 +380,8 @@ impl CdegScreen {
     // ── CD+EG CLUT loaders ────────────────────────────────────────────────────
 
     fn memory_control(&mut self, data: &[u8; 16]) {
-        let mode    = data[0];
-        let write   = mode & 0x03;
+        let mode = data[0];
+        let write = mode & 0x03;
         let display = (mode >> 2) & 0x03;
 
         // In 256-color mode only NoWrite (0) or Both (3) are valid write modes.
@@ -394,13 +408,15 @@ impl CdegScreen {
     fn load_clut256_high(&mut self, start: usize, data: &[u8; 16]) {
         for i in 0..8 {
             let idx = start + i;
-            if idx >= 256 { break; }
-            let hi = data[i * 2]     & 0x3F;
+            if idx >= 256 {
+                break;
+            }
+            let hi = data[i * 2] & 0x3F;
             let lo = data[i * 2 + 1] & 0x3F;
             let r4 = (hi >> 2) & 0x0F;
             let g4 = ((hi & 0x03) << 2) | ((lo >> 4) & 0x03);
             let b4 = lo & 0x0F;
-            let c  = &mut self.clut256[idx];
+            let c = &mut self.clut256[idx];
             // Place the 4-bit values into the upper 4 bits of the 6-bit field.
             c.r = (c.r & 0x03) | (r4 << 2);
             c.g = (c.g & 0x03) | (g4 << 2);
@@ -413,9 +429,11 @@ impl CdegScreen {
     fn load_clut256_low(&mut self, start: usize, data: &[u8; 16]) {
         for i in 0..16 {
             let idx = start + i;
-            if idx >= 256 { break; }
+            if idx >= 256 {
+                break;
+            }
             let byte = data[i];
-            let c    = &mut self.clut256[idx];
+            let c = &mut self.clut256[idx];
             c.r = (c.r & 0x3C) | ((byte >> 4) & 0x03);
             c.g = (c.g & 0x3C) | ((byte >> 2) & 0x03);
             c.b = (c.b & 0x3C) | (byte & 0x03);
@@ -429,22 +447,20 @@ impl CdegScreen {
         let v1 = self.primary.v_offset as isize;
         let h2 = self.secondary.h_offset as isize;
         let v2 = self.secondary.v_offset as isize;
-        let border_rgb = self.clut256[
-            self.primary.border_color as usize | ((self.secondary.border_color as usize) << 4)
-        ].to_rgb32();
+        let border_rgb = self.clut256
+            [self.primary.border_color as usize | ((self.secondary.border_color as usize) << 4)]
+            .to_rgb32();
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                if y < BORDER_Y || y >= HEIGHT - BORDER_Y
-                    || x < BORDER_X || x >= WIDTH - BORDER_X
-                {
+                if y < BORDER_Y || y >= HEIGHT - BORDER_Y || x < BORDER_X || x >= WIDTH - BORDER_X {
                     out[y * WIDTH + x] = border_rgb;
                     continue;
                 }
-                let sx1 = (x as isize - h1).rem_euclid(WIDTH  as isize) as usize;
+                let sx1 = (x as isize - h1).rem_euclid(WIDTH as isize) as usize;
                 let sy1 = (y as isize - v1).rem_euclid(HEIGHT as isize) as usize;
-                let sx2 = (x as isize - h2).rem_euclid(WIDTH  as isize) as usize;
+                let sx2 = (x as isize - h2).rem_euclid(WIDTH as isize) as usize;
                 let sy2 = (y as isize - v2).rem_euclid(HEIGHT as isize) as usize;
-                let p_idx = self.primary.pixels  [sy1 * WIDTH + sx1] as usize;
+                let p_idx = self.primary.pixels[sy1 * WIDTH + sx1] as usize;
                 let s_idx = self.secondary.pixels[sy2 * WIDTH + sx2] as usize;
                 out[y * WIDTH + x] = self.clut256[p_idx | (s_idx << 4)].to_rgb32();
             }
@@ -462,31 +478,30 @@ impl CdegScreen {
         // mixed = (p4 + s4) * 16 clamped to 255.
         let mix = |p8: u32, s8: u32| -> u32 { ((p8 / 17 + s8 / 17) * 16).min(255) };
 
-        let bp = self.primary.palette  [self.primary.border_color   as usize];
+        let bp = self.primary.palette[self.primary.border_color as usize];
         let bs = self.secondary.palette[self.secondary.border_color as usize];
         let border_rgb = (mix((bp >> 16) & 0xFF, (bs >> 16) & 0xFF) << 16)
             | (mix((bp >> 8) & 0xFF, (bs >> 8) & 0xFF) << 8)
-            |  mix( bp       & 0xFF,  bs        & 0xFF);
+            | mix(bp & 0xFF, bs & 0xFF);
 
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                if y < BORDER_Y || y >= HEIGHT - BORDER_Y
-                    || x < BORDER_X || x >= WIDTH - BORDER_X
-                {
+                if y < BORDER_Y || y >= HEIGHT - BORDER_Y || x < BORDER_X || x >= WIDTH - BORDER_X {
                     out[y * WIDTH + x] = border_rgb;
                     continue;
                 }
-                let sx1 = (x as isize - h1).rem_euclid(WIDTH  as isize) as usize;
+                let sx1 = (x as isize - h1).rem_euclid(WIDTH as isize) as usize;
                 let sy1 = (y as isize - v1).rem_euclid(HEIGHT as isize) as usize;
-                let sx2 = (x as isize - h2).rem_euclid(WIDTH  as isize) as usize;
+                let sx2 = (x as isize - h2).rem_euclid(WIDTH as isize) as usize;
                 let sy2 = (y as isize - v2).rem_euclid(HEIGHT as isize) as usize;
 
-                let p_rgb = self.primary.palette  [self.primary.pixels  [sy1 * WIDTH + sx1] as usize];
-                let s_rgb = self.secondary.palette[self.secondary.pixels[sy2 * WIDTH + sx2] as usize];
+                let p_rgb = self.primary.palette[self.primary.pixels[sy1 * WIDTH + sx1] as usize];
+                let s_rgb =
+                    self.secondary.palette[self.secondary.pixels[sy2 * WIDTH + sx2] as usize];
 
                 let r = mix((p_rgb >> 16) & 0xFF, (s_rgb >> 16) & 0xFF);
-                let g = mix((p_rgb >>  8) & 0xFF, (s_rgb >>  8) & 0xFF);
-                let b = mix( p_rgb        & 0xFF,  s_rgb        & 0xFF);
+                let g = mix((p_rgb >> 8) & 0xFF, (s_rgb >> 8) & 0xFF);
+                let b = mix(p_rgb & 0xFF, s_rgb & 0xFF);
                 out[y * WIDTH + x] = (r << 16) | (g << 8) | b;
             }
         }

@@ -22,7 +22,7 @@ fn map(p: Pos2, rect: Rect) -> Pos2 {
     let svg = Vec2::new(75.0, 75.0);
     Pos2::new(
         rect.left() + p.x / svg.x * rect.width(),
-        rect.top()  + p.y / svg.y * rect.height(),
+        rect.top() + p.y / svg.y * rect.height(),
     )
 }
 
@@ -37,8 +37,8 @@ fn draw_speaker(painter: &Painter, rect: Rect) {
     let points: Vec<Pos2> = [
         (39.389, 13.769),
         (22.235, 28.606),
-        (6.0,    28.606),
-        (6.0,    47.699),
+        (6.0, 28.606),
+        (6.0, 47.699),
         (21.989, 47.699),
         (39.389, 62.75),
     ]
@@ -59,23 +59,19 @@ fn draw_waves(painter: &Painter, rect: Rect, count: usize) {
     // Small:  x=48, y=27.6..49     → arc radius ~10.7
     // Medium: x=55.1, y=20.5..56.1 → arc radius ~17.8
     // Large:  x=61.6, y=14..62.6   → arc radius ~24.3
-    let waves: &[(f32, f32, f32)] = &[
-        (48.0,  27.6, 49.0),
-        (55.1,  20.5, 56.1),
-        (61.6,  14.0, 62.6),
-    ];
+    let waves: &[(f32, f32, f32)] = &[(48.0, 27.6, 49.0), (55.1, 20.5, 56.1), (61.6, 14.0, 62.6)];
 
     let sw = stroke(rect);
 
     for &(ax, y_top, y_bot) in waves.iter().take(count) {
         let cy = (y_top + y_bot) / 2.0;
-        let r  = (y_bot - y_top) / 2.0;
+        let r = (y_bot - y_top) / 2.0;
 
         // Approximate the arc with a cubic bezier.
         // Control-point offset for a ~180° arc: k = r * 4/3 * tan(π/4) ≈ r * 0.5523
         let k = r * 0.5523;
 
-        let top    = map(Pos2::new(ax, cy - r), rect);
+        let top = map(Pos2::new(ax, cy - r), rect);
         let bottom = map(Pos2::new(ax, cy + r), rect);
         let center = map(Pos2::new(ax, cy), rect);
 
@@ -86,8 +82,8 @@ fn draw_waves(painter: &Painter, rect: Rect, count: usize) {
         painter.add(egui::Shape::CubicBezier(egui::epaint::CubicBezierShape {
             points: [
                 top,
-                center + vec2(right_offset.x,  -right_offset.x),
-                center + vec2(right_offset.x,   right_offset.x),
+                center + vec2(right_offset.x, -right_offset.x),
+                center + vec2(right_offset.x, right_offset.x),
                 bottom,
             ],
             closed: false,

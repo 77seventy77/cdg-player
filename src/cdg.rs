@@ -27,16 +27,16 @@ pub enum Instruction {
 impl Instruction {
     fn from_byte(b: u8) -> Option<Self> {
         match b & 0x3F {
-            1  => Some(Self::MemoryPreset),
-            2  => Some(Self::BorderPreset),
-            6  => Some(Self::TileBlock),
+            1 => Some(Self::MemoryPreset),
+            2 => Some(Self::BorderPreset),
+            6 => Some(Self::TileBlock),
             20 => Some(Self::ScrollPreset),
             24 => Some(Self::ScrollCopy),
             28 => Some(Self::DefineTransparent),
             30 => Some(Self::LoadColorTableLow),
             31 => Some(Self::LoadColorTableHigh),
             38 => Some(Self::TileBlockXor),
-            _  => None,
+            _ => None,
         }
     }
 }
@@ -75,18 +75,22 @@ pub enum CdegInstruction {
     LoadClut256High { start: u8 },
     /// Instructions 48-63 — load low 2 bits of 16 entries in the 256-entry CLUT.
     /// `start` is the first CLUT index to update (multiple of 16, 0-240).
-    LoadClut256Low  { start: u8 },
+    LoadClut256Low { start: u8 },
 }
 
 impl CdegInstruction {
     fn from_byte(b: u8) -> Option<Self> {
         match b & 0x3F {
-            3         => Some(Self::MemoryControl),
-            6         => Some(Self::SetFont),
-            14        => Some(Self::XorFont),
-            i @ 16..=47 => Some(Self::LoadClut256High { start: (i - 16) * 8 }),
-            i @ 48..=63 => Some(Self::LoadClut256Low  { start: (i - 48) * 16 }),
-            _         => None,
+            3 => Some(Self::MemoryControl),
+            6 => Some(Self::SetFont),
+            14 => Some(Self::XorFont),
+            i @ 16..=47 => Some(Self::LoadClut256High {
+                start: (i - 16) * 8,
+            }),
+            i @ 48..=63 => Some(Self::LoadClut256Low {
+                start: (i - 48) * 16,
+            }),
+            _ => None,
         }
     }
 }
@@ -142,7 +146,10 @@ impl<'a> Iterator for PacketIter<'a> {
             for (i, b) in raw[4..20].iter().enumerate() {
                 data[i] = b & 0x3F;
             }
-            Some(AnyPacket::Item2(CdegPacket { instruction: instr, data }))
+            Some(AnyPacket::Item2(CdegPacket {
+                instruction: instr,
+                data,
+            }))
         } else {
             None
         };

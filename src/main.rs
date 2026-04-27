@@ -7,15 +7,15 @@ mod export;
 mod icons;
 mod renderer;
 
-use cdg::{AnyPacket, PacketIter, PACKETS_PER_SECOND};
-use config::{scan_library, Config, DiscEntry, DiscSource};
+use cdg::{AnyPacket, PACKETS_PER_SECOND, PacketIter};
+use config::{Config, DiscEntry, DiscSource, scan_library};
 use cue::{CHANNELS, SAMPLE_RATE};
 use export::{CancelToken, ExportState, Progress};
 use renderer::{CdegScreen, HEIGHT, WIDTH};
 
 use eframe::egui;
 use egui::{ColorImage, TextureHandle, TextureOptions};
-use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
+use rodio::{OutputStream, OutputStreamHandle, Sink, buffer::SamplesBuffer};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -24,46 +24,58 @@ use std::{
 // ── Playback ──────────────────────────────────────────────────────────────────
 
 #[derive(PartialEq)]
-enum PlayState { Playing, Paused, Stopped }
+enum PlayState {
+    Playing,
+    Paused,
+    Stopped,
+}
 
 struct Player {
-    packets:       Vec<(u32, Option<AnyPacket>)>,
-    screen:        CdegScreen,
-    state:         PlayState,
-    packet_idx:    usize,
-    epoch:         Instant,
-    paused_at:     Option<Instant>,
+    packets: Vec<(u32, Option<AnyPacket>)>,
+    screen: CdegScreen,
+    state: PlayState,
+    packet_idx: usize,
+    epoch: Instant,
+    paused_at: Option<Instant>,
     total_packets: usize,
-    _stream:       OutputStream,
-    sink:          Sink,
+    _stream: OutputStream,
+    sink: Sink,
     audio_samples: Vec<i16>,
     /// True if this disc contains Item 2 (CD+EG) packets.
-    pub is_cdeg:   bool,
+    pub is_cdeg: bool,
 }
 
 impl Player {
     fn new(track: &cue::Track, cdg_path: &PathBuf, cdeg_enabled: bool) -> Self {
-        let cdg_raw  = std::fs::read(cdg_path).unwrap_or_default();
+        let cdg_raw = std::fs::read(cdg_path).unwrap_or_default();
         let cdg_offset = track.cdg_offset() as usize;
         // Limit CDG data to this track's sectors only (4 packets × 24 bytes each).
-        let cdg_end = (cdg_offset + track.sectors as usize * 4 * cdg::PACKET_SIZE)
-            .min(cdg_raw.len());
+        let cdg_end =
+            (cdg_offset + track.sectors as usize * 4 * cdg::PACKET_SIZE).min(cdg_raw.len());
         let cdg_data = &cdg_raw[cdg_offset.min(cdg_raw.len())..cdg_end];
         let packets: Vec<_> = PacketIter::new(cdg_data).collect();
         let total = packets.len();
 
         // Auto-detect whether this disc has any CD+EG (Item 2) data.
-        let has_cdeg = packets.iter().any(|(_, p)| matches!(p, Some(AnyPacket::Item2(_))));
-        let cdeg_on  = cdeg_enabled && has_cdeg;
+        let has_cdeg = packets
+            .iter()
+            .any(|(_, p)| matches!(p, Some(AnyPacket::Item2(_))));
+        let cdeg_on = cdeg_enabled && has_cdeg;
 
         let audio_samples = track.load_audio();
         let (_stream, stream_handle) = OutputStream::try_default().expect("audio output");
         let sink = make_sink(&stream_handle, &audio_samples);
         Player {
-            packets, screen: CdegScreen::new(cdeg_on),
+            packets,
+            screen: CdegScreen::new(cdeg_on),
             state: PlayState::Playing,
-            packet_idx: 0, epoch: Instant::now(), paused_at: None,
-            total_packets: total, _stream, sink, audio_samples,
+            packet_idx: 0,
+            epoch: Instant::now(),
+            paused_at: None,
+            total_packets: total,
+            _stream,
+            sink,
+            audio_samples,
             is_cdeg: has_cdeg,
         }
     }
@@ -78,10 +90,16 @@ impl Player {
             / (cue::SAMPLE_RATE as f64 * cue::CHANNELS as f64)
             * PACKETS_PER_SECOND as f64) as usize;
         Player {
-            packets: vec![], screen: CdegScreen::new(cdeg_enabled),
+            packets: vec![],
+            screen: CdegScreen::new(cdeg_enabled),
             state: PlayState::Playing,
-            packet_idx: 0, epoch: Instant::now(), paused_at: None,
-            total_packets, _stream, sink, audio_samples,
+            packet_idx: 0,
+            epoch: Instant::now(),
+            paused_at: None,
+            total_packets,
+            _stream,
+            sink,
+            audio_samples,
             is_cdeg: false,
         }
     }
@@ -89,7 +107,7 @@ impl Player {
     fn elapsed(&self) -> Duration {
         match self.paused_at {
             Some(t) => t.duration_since(self.epoch),
-            None    => self.epoch.elapsed(),
+            None => self.epoch.elapsed(),
         }
     }
 
@@ -101,26 +119,38 @@ impl Player {
         let target = target.min(self.total_packets);
         self.screen = CdegScreen::new(self.screen.cdeg_enabled);
         for i in 0..target {
-            if let (_, Some(ref pkt)) = self.packets[i] { self.screen.apply(pkt); }
+            if let (_, Some(ref pkt)) = self.packets[i] {
+                self.screen.apply(pkt);
+            }
         }
         self.packet_idx = target;
         let offset = Duration::from_secs_f64(target as f64 / PACKETS_PER_SECOND as f64);
         self.epoch = Instant::now() - offset;
-        if self.paused_at.is_some() { self.paused_at = Some(Instant::now()); }
+        if self.paused_at.is_some() {
+            self.paused_at = Some(Instant::now());
+        }
         self.sink.stop();
         let sample_pos = (target as f64 / PACKETS_PER_SECOND as f64 * SAMPLE_RATE as f64) as usize
             * CHANNELS as usize;
         if !self.audio_samples.is_empty() && sample_pos < self.audio_samples.len() {
             self.sink.append(SamplesBuffer::new(
-                CHANNELS, SAMPLE_RATE, self.audio_samples[sample_pos..].to_vec(),
+                CHANNELS,
+                SAMPLE_RATE,
+                self.audio_samples[sample_pos..].to_vec(),
             ));
-            if self.state == PlayState::Paused { self.sink.pause(); }
+            if self.state == PlayState::Paused {
+                self.sink.pause();
+            }
         }
     }
 
     fn play(&mut self) {
-        if self.state == PlayState::Stopped { self.seek_to(0); }
-        if let Some(paused_at) = self.paused_at.take() { self.epoch += Instant::now() - paused_at; }
+        if self.state == PlayState::Stopped {
+            self.seek_to(0);
+        }
+        if let Some(paused_at) = self.paused_at.take() {
+            self.epoch += Instant::now() - paused_at;
+        }
         self.state = PlayState::Playing;
         self.sink.play();
     }
@@ -143,14 +173,20 @@ impl Player {
     }
 
     fn tick(&mut self) {
-        if self.state != PlayState::Playing { return; }
+        if self.state != PlayState::Playing {
+            return;
+        }
         let due = (self.epoch.elapsed().as_secs_f64() * PACKETS_PER_SECOND as f64) as usize;
         let due = due.min(self.total_packets);
         while self.packet_idx < due && self.packet_idx < self.packets.len() {
-            if let (_, Some(ref pkt)) = self.packets[self.packet_idx] { self.screen.apply(pkt); }
+            if let (_, Some(ref pkt)) = self.packets[self.packet_idx] {
+                self.screen.apply(pkt);
+            }
             self.packet_idx += 1;
         }
-        if self.packet_idx >= self.total_packets { self.state = PlayState::Stopped; }
+        if self.packet_idx >= self.total_packets {
+            self.state = PlayState::Stopped;
+        }
     }
 }
 
@@ -165,23 +201,23 @@ fn make_sink(handle: &OutputStreamHandle, samples: &[i16]) -> Sink {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 struct App {
-    config:          Config,
-    library:         Vec<DiscEntry>,
-    player:          Option<Player>,
-    tracks:          Vec<cue::Track>,
-    cdg_path:        Option<PathBuf>,
-    track_idx:       usize,
-    texture:         Option<TextureHandle>,
-    volume:          f32,
+    config: Config,
+    library: Vec<DiscEntry>,
+    player: Option<Player>,
+    tracks: Vec<cue::Track>,
+    cdg_path: Option<PathBuf>,
+    track_idx: usize,
+    texture: Option<TextureHandle>,
+    volume: f32,
     export_progress: Option<Progress>,
-    export_cancel:   Option<CancelToken>,
+    export_cancel: Option<CancelToken>,
     /// Whether to enable CD+EG decoding on supported discs.
-    cdeg_enabled:    bool,
+    cdeg_enabled: bool,
     /// Temp directory created when a disc was loaded from a ZIP.
     /// Deleted when a new disc is loaded or the app exits.
-    zip_temp_dir:    Option<PathBuf>,
+    zip_temp_dir: Option<PathBuf>,
     /// Error message to display in the central panel (dismissed on next open).
-    open_error:      Option<String>,
+    open_error: Option<String>,
 }
 
 impl Drop for App {
@@ -194,23 +230,35 @@ impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_fonts(&cc.egui_ctx);
         let config = Config::load();
-        let library = config.library_path.as_deref()
-            .map(scan_library).unwrap_or_default();
+        let library = config
+            .library_path
+            .as_deref()
+            .map(scan_library)
+            .unwrap_or_default();
         let mut app = App {
-            config, library,
-            player: None, tracks: vec![], cdg_path: None,
-            track_idx: 0, texture: None,
-            volume: 1.0, export_progress: None, export_cancel: None,
+            config,
+            library,
+            player: None,
+            tracks: vec![],
+            cdg_path: None,
+            track_idx: 0,
+            texture: None,
+            volume: 1.0,
+            export_progress: None,
+            export_cancel: None,
             cdeg_enabled: true,
             zip_temp_dir: None,
-            open_error:   None,
+            open_error: None,
         };
         // Optional CLI args: <cue> <track#> <cdg>
         let args: Vec<String> = std::env::args().collect();
         if args.len() == 4 {
             let tracks = cue::parse_cue(&PathBuf::from(&args[1]));
             let track_num: u32 = args[2].parse().unwrap_or(1);
-            let idx = tracks.iter().position(|t| t.number == track_num).unwrap_or(0);
+            let idx = tracks
+                .iter()
+                .position(|t| t.number == track_num)
+                .unwrap_or(0);
             app.cdg_path = Some(PathBuf::from(&args[3]));
             app.tracks = tracks;
             app.load_track(idx);
@@ -222,12 +270,19 @@ impl App {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Disc image", &["cue", "zip", "7z"])
             .pick_file()
-        else { return };
+        else {
+            return;
+        };
 
-        match path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref() {
+        match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref()
+        {
             Some("zip") => self.open_zip(path),
-            Some("7z")  => self.open_7z(path),
-            _            => self.load_cue(path),
+            Some("7z") => self.open_7z(path),
+            _ => self.load_cue(path),
         }
     }
 
@@ -246,7 +301,9 @@ impl App {
                 self.zip_temp_dir = Some(temp_dir);
                 self.load_cue(cue_path);
             }
-            Err(e) => { self.open_error = Some(e); }
+            Err(e) => {
+                self.open_error = Some(e);
+            }
         }
     }
 
@@ -258,13 +315,19 @@ impl App {
                 self.zip_temp_dir = Some(temp_dir);
                 self.load_cue(cue_path);
             }
-            Err(e) => { self.open_error = Some(e); }
+            Err(e) => {
+                self.open_error = Some(e);
+            }
         }
     }
 
     fn load_cue(&mut self, cue_path: PathBuf) {
         // If we're loading a plain .cue (not from a ZIP), drop any previous temp dir.
-        if self.zip_temp_dir.as_ref().map_or(true, |d| !cue_path.starts_with(d)) {
+        if self
+            .zip_temp_dir
+            .as_ref()
+            .map_or(true, |d| !cue_path.starts_with(d))
+        {
             self.cleanup_zip_temp();
         }
 
@@ -276,10 +339,16 @@ impl App {
             } else {
                 // CDG file name doesn't match the cue — find any .cdg in the same folder.
                 cue_path.parent().and_then(|dir| {
-                    std::fs::read_dir(dir).ok()?.flatten().find(|e| {
-                        e.path().extension().and_then(|x| x.to_str())
-                            .map_or(false, |x| x.eq_ignore_ascii_case("cdg"))
-                    }).map(|e| e.path())
+                    std::fs::read_dir(dir)
+                        .ok()?
+                        .flatten()
+                        .find(|e| {
+                            e.path()
+                                .extension()
+                                .and_then(|x| x.to_str())
+                                .map_or(false, |x| x.eq_ignore_ascii_case("cdg"))
+                        })
+                        .map(|e| e.path())
                 })
             };
             candidate.filter(|p| p.metadata().map(|m| m.len() > 0).unwrap_or(false))
@@ -294,7 +363,9 @@ impl App {
     }
 
     fn load_track(&mut self, idx: usize) {
-        let Some(track) = self.tracks.get(idx) else { return };
+        let Some(track) = self.tracks.get(idx) else {
+            return;
+        };
         self.track_idx = idx;
 
         if let Some(ref cdg) = self.cdg_path {
@@ -310,26 +381,36 @@ impl App {
     }
 
     fn refresh_library(&mut self) {
-        self.library = self.config.library_path.as_deref()
-            .map(scan_library).unwrap_or_default();
+        self.library = self
+            .config
+            .library_path
+            .as_deref()
+            .map(scan_library)
+            .unwrap_or_default();
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Some(ref mut p) = self.player { p.tick(); }
+        if let Some(ref mut p) = self.player {
+            p.tick();
+        }
 
         // ── Bottom toolbar (two rows) ─────────────────────────────────────
-        egui::TopBottomPanel::bottom("controls").show(ctx, |ui| {
+        let toolbar = egui::TopBottomPanel::bottom("controls").show(ctx, |ui| {
             ui.add_space(3.0);
 
             // ── Row 1: disc controls ──────────────────────────────────────
             ui.horizontal(|ui| {
-                if ui.button("Open").clicked() { self.open_disc_dialog(); }
+                if ui.button("Open").clicked() {
+                    self.open_disc_dialog();
+                }
 
                 if self.player.is_some() {
                     if ui.button("Library").clicked() {
-                        if let Some(ref mut p) = self.player { p.stop(); }
+                        if let Some(ref mut p) = self.player {
+                            p.stop();
+                        }
                         self.player = None;
                         self.tracks = vec![];
                         self.cdg_path = None;
@@ -359,9 +440,17 @@ impl eframe::App for App {
                         ui.separator();
                         let enabled = player.screen.cdeg_enabled;
                         let (label, fg, bg) = if enabled {
-                            ("CD+EG", egui::Color32::BLACK, egui::Color32::from_rgb(80, 180, 80))
+                            (
+                                "CD+EG",
+                                egui::Color32::BLACK,
+                                egui::Color32::from_rgb(80, 180, 80),
+                            )
                         } else {
-                            ("CD+G", egui::Color32::from_gray(180), egui::Color32::from_gray(50))
+                            (
+                                "CD+G",
+                                egui::Color32::from_gray(180),
+                                egui::Color32::from_gray(50),
+                            )
                         };
                         let btn = egui::Button::new(
                             egui::RichText::new(label).size(11.0).color(fg).strong(),
@@ -398,7 +487,10 @@ impl eframe::App for App {
                     ui.separator();
 
                     let exporting = matches!(
-                        self.export_progress.as_ref().and_then(|p| p.lock().ok()).as_deref(),
+                        self.export_progress
+                            .as_ref()
+                            .and_then(|p| p.lock().ok())
+                            .as_deref(),
                         Some(ExportState::Running { .. })
                     );
                     if exporting {
@@ -409,15 +501,22 @@ impl eframe::App for App {
                         }
                     } else {
                         let can_export = !self.tracks.is_empty() && self.cdg_path.is_some();
-                        if ui.add_enabled(can_export, egui::Button::new("Export")).clicked() {
+                        if ui
+                            .add_enabled(can_export, egui::Button::new("Export"))
+                            .clicked()
+                        {
                             if let Some(dir) = rfd::FileDialog::new()
                                 .set_title("Choose output folder for MKV files")
                                 .pick_folder()
                             {
-                                let cdeg_on = self.player.as_ref()
+                                let cdeg_on = self
+                                    .player
+                                    .as_ref()
                                     .map(|p| p.screen.cdeg_enabled)
                                     .unwrap_or(self.cdeg_enabled);
-                                let disc_title = self.cdg_path.as_ref()
+                                let disc_title = self
+                                    .cdg_path
+                                    .as_ref()
                                     .and_then(|p| p.file_stem())
                                     .map(|s| s.to_string_lossy().into_owned())
                                     .unwrap_or_else(|| "Disc".to_string());
@@ -429,22 +528,32 @@ impl eframe::App for App {
                                     disc_title,
                                 );
                                 self.export_progress = Some(prog);
-                                self.export_cancel   = Some(cancel);
+                                self.export_cancel = Some(cancel);
                             }
                         }
                     }
 
                     if let Some(ref prog) = self.export_progress {
                         match &*prog.lock().unwrap() {
-                            ExportState::Running { track_idx, total, frame_frac } => {
+                            ExportState::Running {
+                                track_idx,
+                                total,
+                                frame_frac,
+                            } => {
                                 ui.label(format!(
                                     "Track {}/{} — {:.0}%",
-                                    track_idx + 1, total, frame_frac * 100.0
+                                    track_idx + 1,
+                                    total,
+                                    frame_frac * 100.0
                                 ));
                             }
-                            ExportState::Done  => { ui.label("Export done."); }
-                            ExportState::Error(e) => { ui.colored_label(egui::Color32::RED, e); }
-                            ExportState::Idle  => {}
+                            ExportState::Done => {
+                                ui.label("Export done.");
+                            }
+                            ExportState::Error(e) => {
+                                ui.colored_label(egui::Color32::RED, e);
+                            }
+                            ExportState::Idle => {}
                         }
                     }
                 });
@@ -455,11 +564,15 @@ impl eframe::App for App {
             // ── Row 2: transport + seek + time | volume ───────────────────
             ui.horizontal(|ui| {
                 if let Some(ref mut player) = self.player {
-                    let play_label = if player.state == PlayState::Playing { "⏸" } else { "▶" };
+                    let play_label = if player.state == PlayState::Playing {
+                        "⏸"
+                    } else {
+                        "▶"
+                    };
                     if ui.button(play_label).clicked() {
                         match player.state {
                             PlayState::Playing => player.pause(),
-                            _                  => player.play(),
+                            _ => player.play(),
                         }
                     }
                 }
@@ -467,8 +580,11 @@ impl eframe::App for App {
                 // Time label — left of the seek slider.
                 if let Some(ref player) = self.player {
                     let elapsed = player.elapsed();
-                    let total   = player.total_duration();
-                    let fmt = |d: Duration| { let s = d.as_secs(); format!("{:02}:{:02}", s/60, s%60) };
+                    let total = player.total_duration();
+                    let fmt = |d: Duration| {
+                        let s = d.as_secs();
+                        format!("{:02}:{:02}", s / 60, s % 60)
+                    };
                     ui.label(format!("{} / {}", fmt(elapsed), fmt(total)));
                 }
 
@@ -491,7 +607,7 @@ impl eframe::App for App {
 
                 // Volume section — pushed to the far right.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let icon_h  = ui.available_height();
+                    let icon_h = ui.available_height();
                     let icon_sz = icons::icon_size(icon_h);
 
                     // Rightmost: reactive sound icon.
@@ -503,11 +619,16 @@ impl eframe::App for App {
                     }
 
                     // Volume slider.
-                    if ui.add_sized(
-                        [80.0, ui.available_height()],
-                        egui::Slider::new(&mut self.volume, 0.0f32..=1.0).show_value(false),
-                    ).changed() {
-                        if let Some(ref p) = self.player { p.sink.set_volume(self.volume); }
+                    if ui
+                        .add_sized(
+                            [80.0, ui.available_height()],
+                            egui::Slider::new(&mut self.volume, 0.0f32..=1.0).show_value(false),
+                        )
+                        .changed()
+                    {
+                        if let Some(ref p) = self.player {
+                            p.sink.set_volume(self.volume);
+                        }
                     }
                 });
             });
@@ -678,6 +799,17 @@ impl eframe::App for App {
                 }
             });
 
+        // Enforce aspect ratio: height = width × (H/W) + toolbar
+        let toolbar_h = toolbar.response.rect.height();
+        let win = ctx.screen_rect();
+        let correct_h = win.width() * HEIGHT as f32 / WIDTH as f32 + toolbar_h;
+        if (correct_h - win.height()).abs() > 1.0 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                win.width(),
+                correct_h,
+            )));
+        }
+
         ctx.request_repaint_after(Duration::from_millis(16));
     }
 }
@@ -690,31 +822,40 @@ impl eframe::App for App {
 fn sanitize_filename(name: &str) -> String {
     let p = Path::new(name);
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let stem: String = p.file_stem()
+    let stem: String = p
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(name)
         .chars()
         .filter(|c| c.is_ascii())
         .collect();
-    if ext.is_empty() { stem } else { format!("{stem}.{ext}") }
+    if ext.is_empty() {
+        stem
+    } else {
+        format!("{stem}.{ext}")
+    }
 }
 
 /// Rewrite FILE references in a .cue sheet to use sanitized filenames.
 fn sanitize_cue(content: &[u8]) -> Vec<u8> {
     let text = String::from_utf8_lossy(content);
-    let result = text.lines().map(|line| {
-        let trimmed = line.trim();
-        if trimmed.to_ascii_uppercase().starts_with("FILE ") {
-            if let (Some(s), Some(e)) = (line.find('"'), line.rfind('"')) {
-                if s < e {
-                    let original = &line[s+1..e];
-                    let sanitized = sanitize_filename(original);
-                    return format!("{}{}{}", &line[..s+1], sanitized, &line[e..]);
+    let result = text
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.to_ascii_uppercase().starts_with("FILE ") {
+                if let (Some(s), Some(e)) = (line.find('"'), line.rfind('"')) {
+                    if s < e {
+                        let original = &line[s + 1..e];
+                        let sanitized = sanitize_filename(original);
+                        return format!("{}{}{}", &line[..s + 1], sanitized, &line[e..]);
+                    }
                 }
             }
-        }
-        line.to_string()
-    }).collect::<Vec<_>>().join("\n");
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     result.into_bytes()
 }
 
@@ -724,21 +865,18 @@ fn sanitize_cue(content: &[u8]) -> Vec<u8> {
 fn extract_disc_zip(zip_path: &Path) -> Result<(PathBuf, PathBuf), String> {
     use std::io::Read;
 
-    let file = std::fs::File::open(zip_path)
-        .map_err(|e| format!("Cannot open ZIP: {e}"))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| format!("Invalid ZIP file: {e}"))?;
+    let file = std::fs::File::open(zip_path).map_err(|e| format!("Cannot open ZIP: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid ZIP file: {e}"))?;
 
     // Unique temp dir per process so concurrent launches don't collide.
-    let temp_dir = std::env::temp_dir()
-        .join(format!("cdg-player-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Cannot create temp dir: {e}"))?;
+    let temp_dir = std::env::temp_dir().join(format!("cdg-player-{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Cannot create temp dir: {e}"))?;
 
     let mut cue_path: Option<PathBuf> = None;
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i)
+        let mut entry = archive
+            .by_index(i)
             .map_err(|e| format!("ZIP entry error: {e}"))?;
 
         // Skip directories and files we don't care about.
@@ -759,22 +897,27 @@ fn extract_disc_zip(zip_path: &Path) -> Result<(PathBuf, PathBuf), String> {
             .to_string_lossy();
 
         let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut buf)
+        entry
+            .read_to_end(&mut buf)
             .map_err(|e| format!("Failed to read {name} from ZIP: {e}"))?;
 
         // Sanitize the on-disk filename and rewrite .cue FILE refs to match.
         let sanitized = sanitize_filename(&file_name);
         let out_path = temp_dir.join(&sanitized);
-        let data = if lower.ends_with(".cue") { sanitize_cue(&buf) } else { buf };
-        std::fs::write(&out_path, &data)
-            .map_err(|e| format!("Failed to write {name}: {e}"))?;
+        let data = if lower.ends_with(".cue") {
+            sanitize_cue(&buf)
+        } else {
+            buf
+        };
+        std::fs::write(&out_path, &data).map_err(|e| format!("Failed to write {name}: {e}"))?;
 
         if lower.ends_with(".cue") {
             cue_path = Some(out_path);
         }
     }
 
-    let cue = cue_path.ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
+    let cue =
+        cue_path.ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
     Ok((temp_dir, cue))
 }
 
@@ -782,10 +925,8 @@ fn extract_disc_zip(zip_path: &Path) -> Result<(PathBuf, PathBuf), String> {
 /// Works for both regular 7z and Torrent7z.
 /// Returns `(temp_dir, cue_path)` on success.
 fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let temp_dir = std::env::temp_dir()
-        .join(format!("cdg-player-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("Cannot create temp dir: {e}"))?;
+    let temp_dir = std::env::temp_dir().join(format!("cdg-player-{}", std::process::id()));
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Cannot create temp dir: {e}"))?;
 
     let mut reader = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty())
         .map_err(|e| format!("Cannot open 7z: {e}"))?;
@@ -793,13 +934,24 @@ fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
     // Check that relevant files are stored uncompressed before extracting.
     for entry in reader.archive().files.iter() {
         let name = entry.name().to_ascii_lowercase();
-        if entry.is_directory() { continue; }
-        if !name.ends_with(".cue") && !name.ends_with(".bin") && !name.ends_with(".cdg") { continue; }
-        if !entry.has_stream() { continue; }
+        if entry.is_directory() {
+            continue;
+        }
+        if !name.ends_with(".cue") && !name.ends_with(".bin") && !name.ends_with(".cdg") {
+            continue;
+        }
+        if !entry.has_stream() {
+            continue;
+        }
         let mut methods = Vec::new();
-        if reader.file_compression_methods(entry.name(), &mut methods).is_ok() {
+        if reader
+            .file_compression_methods(entry.name(), &mut methods)
+            .is_ok()
+        {
             let is_store = methods.is_empty()
-                || methods.iter().all(|m| *m == sevenz_rust2::EncoderMethod::COPY);
+                || methods
+                    .iter()
+                    .all(|m| *m == sevenz_rust2::EncoderMethod::COPY);
             if !is_store {
                 return Err("CD+G Player supports uncompressed archives only.".to_string());
             }
@@ -808,36 +960,40 @@ fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
 
     let mut cue_path: Option<PathBuf> = None;
 
-    reader.for_each_entries(|entry, source| {
-        let name = entry.name().to_ascii_lowercase();
-        if entry.is_directory()
-            || (!name.ends_with(".cue") && !name.ends_with(".bin") && !name.ends_with(".cdg"))
-        {
-            std::io::copy(source, &mut std::io::sink())?; // must consume reader
-            return Ok(true);
-        }
-        // Flatten any folder prefix and sanitize the filename.
-        let file_name = Path::new(entry.name())
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new(entry.name()))
-            .to_string_lossy()
-            .into_owned();
-        let sanitized = sanitize_filename(&file_name);
-        let out_path = temp_dir.join(&sanitized);
-        if name.ends_with(".cue") {
-            let mut buf = Vec::new();
-            std::io::copy(source, &mut buf)?;
-            std::fs::write(&out_path, sanitize_cue(&buf))?;
-        } else {
-            let mut out = std::fs::File::create(&out_path)?;
-            std::io::copy(source, &mut out)?;
-        }
-        Ok(true)
-    })
-    .map_err(|e| format!("7z extraction failed: {e}"))?;
+    reader
+        .for_each_entries(|entry, source| {
+            let name = entry.name().to_ascii_lowercase();
+            if entry.is_directory()
+                || (!name.ends_with(".cue") && !name.ends_with(".bin") && !name.ends_with(".cdg"))
+            {
+                std::io::copy(source, &mut std::io::sink())?; // must consume reader
+                return Ok(true);
+            }
+            // Flatten any folder prefix and sanitize the filename.
+            let file_name = Path::new(entry.name())
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new(entry.name()))
+                .to_string_lossy()
+                .into_owned();
+            let sanitized = sanitize_filename(&file_name);
+            let out_path = temp_dir.join(&sanitized);
+            if name.ends_with(".cue") {
+                let mut buf = Vec::new();
+                std::io::copy(source, &mut buf)?;
+                std::fs::write(&out_path, sanitize_cue(&buf))?;
+            } else {
+                let mut out = std::fs::File::create(&out_path)?;
+                std::io::copy(source, &mut out)?;
+            }
+            Ok(true)
+        })
+        .map_err(|e| format!("7z extraction failed: {e}"))?;
 
     // Find the .cue that was extracted.
-    for entry in std::fs::read_dir(&temp_dir).map_err(|e| e.to_string())?.flatten() {
+    for entry in std::fs::read_dir(&temp_dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let p = entry.path();
         if p.extension().and_then(|e| e.to_str()) == Some("cue") {
             cue_path = Some(p);
@@ -845,7 +1001,8 @@ fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
         }
     }
 
-    let cue = cue_path.ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
+    let cue =
+        cue_path.ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
     Ok((temp_dir, cue))
 }
 
@@ -853,7 +1010,7 @@ fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
 
 fn app_icon() -> egui::IconData {
     let bytes = include_bytes!("../Logo/CDG Logo.png");
-    let img   = image::load_from_memory(bytes)
+    let img = image::load_from_memory(bytes)
         .expect("CDG Logo.png is a valid PNG")
         .into_rgba8();
     let (width, height) = img.dimensions();
@@ -861,9 +1018,9 @@ fn app_icon() -> egui::IconData {
 
     // Apply a squircle mask matching the macOS Dock icon shape.
     // Corner radius is ~22.5% of the icon width (Apple HIG standard).
-    let r   = width as f32 * 0.225;
-    let cx  = width  as f32 / 2.0;
-    let cy  = height as f32 / 2.0;
+    let r = width as f32 * 0.225;
+    let cx = width as f32 / 2.0;
+    let cy = height as f32 / 2.0;
     for y in 0..height {
         for x in 0..width {
             let ax = (x as f32 - cx + 0.5).abs();
@@ -881,7 +1038,11 @@ fn app_icon() -> egui::IconData {
         }
     }
 
-    egui::IconData { rgba, width, height }
+    egui::IconData {
+        rgba,
+        width,
+        height,
+    }
 }
 
 fn setup_fonts(ctx: &egui::Context) {
@@ -892,69 +1053,150 @@ fn setup_fonts(ctx: &egui::Context) {
     // before rendering a missing-glyph box.
     #[cfg(target_os = "macos")]
     let candidates: &[(&str, &str)] = &[
-        ("latin_ext",  "/System/Library/Fonts/Helvetica.ttc"),
-        ("cjk",        "/System/Library/Fonts/PingFang.ttc"),
-        ("arabic",     "/System/Library/Fonts/GeezaPro.ttc"),
-        ("thai",       "/System/Library/Fonts/Thonburi.ttf"),
+        ("latin_ext", "/System/Library/Fonts/Helvetica.ttc"),
+        ("cjk", "/System/Library/Fonts/PingFang.ttc"),
+        ("arabic", "/System/Library/Fonts/GeezaPro.ttc"),
+        ("thai", "/System/Library/Fonts/Thonburi.ttf"),
         ("devanagari", "/System/Library/Fonts/Kohinoor.ttc"),
-        ("hebrew",     "/System/Library/Fonts/Supplemental/Arial Hebrew.ttf"),
-        ("armenian",   "/System/Library/Fonts/Supplemental/Mshtakan.ttf"),
-        ("georgian",   "/System/Library/Fonts/Supplemental/BPG.ttf"),
-        ("tibetan",    "/System/Library/Fonts/Supplemental/Kailasa.ttf"),
-        ("myanmar",    "/System/Library/Fonts/Supplemental/Myanmar MN.ttc"),
-        ("khmer",      "/System/Library/Fonts/Supplemental/Khmer MN.ttc"),
-        ("lao",        "/System/Library/Fonts/Supplemental/Lao MN.ttf"),
-        ("sinhala",    "/System/Library/Fonts/Supplemental/Sinhala MN.ttc"),
+        (
+            "hebrew",
+            "/System/Library/Fonts/Supplemental/Arial Hebrew.ttf",
+        ),
+        (
+            "armenian",
+            "/System/Library/Fonts/Supplemental/Mshtakan.ttf",
+        ),
+        ("georgian", "/System/Library/Fonts/Supplemental/BPG.ttf"),
+        ("tibetan", "/System/Library/Fonts/Supplemental/Kailasa.ttf"),
+        (
+            "myanmar",
+            "/System/Library/Fonts/Supplemental/Myanmar MN.ttc",
+        ),
+        ("khmer", "/System/Library/Fonts/Supplemental/Khmer MN.ttc"),
+        ("lao", "/System/Library/Fonts/Supplemental/Lao MN.ttf"),
+        (
+            "sinhala",
+            "/System/Library/Fonts/Supplemental/Sinhala MN.ttc",
+        ),
     ];
     #[cfg(target_os = "windows")]
     let candidates: &[(&str, &str)] = &[
-        ("latin_ext",  "C:\\Windows\\Fonts\\segoeui.ttf"),
-        ("cjk",        "C:\\Windows\\Fonts\\msgothic.ttc"),
-        ("arabic",     "C:\\Windows\\Fonts\\arial.ttf"),    // covers Arabic + Hebrew
-        ("thai",       "C:\\Windows\\Fonts\\tahoma.ttf"),
+        ("latin_ext", "C:\\Windows\\Fonts\\segoeui.ttf"),
+        ("cjk", "C:\\Windows\\Fonts\\msgothic.ttc"),
+        ("arabic", "C:\\Windows\\Fonts\\arial.ttf"), // covers Arabic + Hebrew
+        ("thai", "C:\\Windows\\Fonts\\tahoma.ttf"),
         ("devanagari", "C:\\Windows\\Fonts\\mangal.ttf"),
-        ("tamil",      "C:\\Windows\\Fonts\\latha.ttf"),
-        ("telugu",     "C:\\Windows\\Fonts\\gautami.ttf"),
-        ("kannada",    "C:\\Windows\\Fonts\\tunga.ttf"),
-        ("malayalam",  "C:\\Windows\\Fonts\\kartika.ttf"),
-        ("sinhala",    "C:\\Windows\\Fonts\\iskpota.ttf"),
-        ("myanmar",    "C:\\Windows\\Fonts\\mmrtext.ttf"),
-        ("ethiopic",   "C:\\Windows\\Fonts\\nyala.ttf"),
-        ("georgian",   "C:\\Windows\\Fonts\\sylfaen.ttf"),
-        ("armenian",   "C:\\Windows\\Fonts\\sylfaen.ttf"),
-        ("khmer",      "C:\\Windows\\Fonts\\leelawad.ttf"),
+        ("tamil", "C:\\Windows\\Fonts\\latha.ttf"),
+        ("telugu", "C:\\Windows\\Fonts\\gautami.ttf"),
+        ("kannada", "C:\\Windows\\Fonts\\tunga.ttf"),
+        ("malayalam", "C:\\Windows\\Fonts\\kartika.ttf"),
+        ("sinhala", "C:\\Windows\\Fonts\\iskpota.ttf"),
+        ("myanmar", "C:\\Windows\\Fonts\\mmrtext.ttf"),
+        ("ethiopic", "C:\\Windows\\Fonts\\nyala.ttf"),
+        ("georgian", "C:\\Windows\\Fonts\\sylfaen.ttf"),
+        ("armenian", "C:\\Windows\\Fonts\\sylfaen.ttf"),
+        ("khmer", "C:\\Windows\\Fonts\\leelawad.ttf"),
     ];
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let candidates: &[(&str, &str)] = &[
-        ("latin_ext",   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        ("latin_ext2",  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
-        ("cjk",         "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-        ("cjk2",        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-        ("arabic",      "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf"),
-        ("arabic2",     "/usr/share/fonts/truetype/arabic/NotoNaskhArabic-Regular.ttf"),
-        ("hebrew",      "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf"),
-        ("devanagari",  "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"),
-        ("thai",        "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"),
-        ("tamil",       "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf"),
-        ("telugu",      "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf"),
-        ("kannada",     "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf"),
-        ("malayalam",   "/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf"),
-        ("bengali",     "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf"),
-        ("sinhala",     "/usr/share/fonts/truetype/noto/NotoSansSinhala-Regular.ttf"),
-        ("myanmar",     "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf"),
-        ("khmer",       "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf"),
-        ("lao",         "/usr/share/fonts/truetype/noto/NotoSansLao-Regular.ttf"),
-        ("tibetan",     "/usr/share/fonts/truetype/noto/NotoSansTibetan-Regular.ttf"),
-        ("ethiopic",    "/usr/share/fonts/truetype/noto/NotoSansEthiopic-Regular.ttf"),
-        ("georgian",    "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf"),
-        ("armenian",    "/usr/share/fonts/truetype/noto/NotoSansArmenian-Regular.ttf"),
+        (
+            "latin_ext",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ),
+        (
+            "latin_ext2",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ),
+        ("cjk", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        (
+            "cjk2",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        ),
+        (
+            "arabic",
+            "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+        ),
+        (
+            "arabic2",
+            "/usr/share/fonts/truetype/arabic/NotoNaskhArabic-Regular.ttf",
+        ),
+        (
+            "hebrew",
+            "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+        ),
+        (
+            "devanagari",
+            "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+        ),
+        (
+            "thai",
+            "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
+        ),
+        (
+            "tamil",
+            "/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf",
+        ),
+        (
+            "telugu",
+            "/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf",
+        ),
+        (
+            "kannada",
+            "/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf",
+        ),
+        (
+            "malayalam",
+            "/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf",
+        ),
+        (
+            "bengali",
+            "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+        ),
+        (
+            "sinhala",
+            "/usr/share/fonts/truetype/noto/NotoSansSinhala-Regular.ttf",
+        ),
+        (
+            "myanmar",
+            "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf",
+        ),
+        (
+            "khmer",
+            "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf",
+        ),
+        (
+            "lao",
+            "/usr/share/fonts/truetype/noto/NotoSansLao-Regular.ttf",
+        ),
+        (
+            "tibetan",
+            "/usr/share/fonts/truetype/noto/NotoSansTibetan-Regular.ttf",
+        ),
+        (
+            "ethiopic",
+            "/usr/share/fonts/truetype/noto/NotoSansEthiopic-Regular.ttf",
+        ),
+        (
+            "georgian",
+            "/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf",
+        ),
+        (
+            "armenian",
+            "/usr/share/fonts/truetype/noto/NotoSansArmenian-Regular.ttf",
+        ),
     ];
 
     for (key, path) in candidates {
         if let Ok(data) = std::fs::read(path) {
-            fonts.font_data.insert((*key).to_owned(), egui::FontData::from_owned(data).into());
+            fonts
+                .font_data
+                .insert((*key).to_owned(), egui::FontData::from_owned(data).into());
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-                fonts.families.entry(family).or_default().push((*key).to_owned());
+                fonts
+                    .families
+                    .entry(family)
+                    .or_default()
+                    .push((*key).to_owned());
             }
         }
     }
@@ -967,6 +1209,7 @@ fn main() {
         viewport: egui::ViewportBuilder::default()
             .with_title("CD+G Player")
             .with_inner_size([WIDTH as f32 * 2.0, HEIGHT as f32 * 2.0 + 48.0])
+            .with_min_inner_size([WIDTH as f32, HEIGHT as f32 + 48.0])
             .with_icon(std::sync::Arc::new(app_icon())),
         ..Default::default()
     };
@@ -974,5 +1217,6 @@ fn main() {
         "CD+G Player",
         options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
-    ).expect("eframe error");
+    )
+    .expect("eframe error");
 }

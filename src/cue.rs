@@ -84,8 +84,12 @@ pub fn parse_cue(cue_path: &Path) -> Vec<Track> {
                  cur_number: u32,
                  cur_is_audio: bool,
                  cur_index01: Option<u64>| {
-        if cur_number == 0 { return; }
-        let Some((ref path, size)) = *cur_bin else { return };
+        if cur_number == 0 {
+            return;
+        }
+        let Some((ref path, size)) = *cur_bin else {
+            return;
+        };
         raw.push(RawTrack {
             number: cur_number,
             bin_path: path.clone(),
@@ -114,18 +118,23 @@ pub fn parse_cue(cue_path: &Path) -> Vec<Track> {
                     path
                 } else {
                     let bins: Vec<_> = std::fs::read_dir(cue_dir)
-                        .map(|rd| rd.flatten()
-                            .filter(|e| e.path().extension()
-                                .and_then(|x| x.to_str())
-                                .map_or(false, |x| x.eq_ignore_ascii_case("bin")))
-                            .collect())
+                        .map(|rd| {
+                            rd.flatten()
+                                .filter(|e| {
+                                    e.path()
+                                        .extension()
+                                        .and_then(|x| x.to_str())
+                                        .map_or(false, |x| x.eq_ignore_ascii_case("bin"))
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default();
 
                     // Pass 1: ASCII-fold match (handles NFC vs NFD).
                     let ascii_key = ascii_fold(name);
-                    let matched = bins.iter().find(|e| {
-                        ascii_fold(&e.file_name().to_string_lossy()) == ascii_key
-                    });
+                    let matched = bins
+                        .iter()
+                        .find(|e| ascii_fold(&e.file_name().to_string_lossy()) == ascii_key);
 
                     // Pass 2: match by track number embedded in the filename.
                     let matched = matched.or_else(|| {
@@ -169,7 +178,9 @@ pub fn parse_cue(cue_path: &Path) -> Vec<Track> {
     let mut abs_sector_cursor: u64 = 0;
 
     for (i, r) in raw.iter().enumerate() {
-        if !r.is_audio { continue; }
+        if !r.is_audio {
+            continue;
+        }
 
         let abs_index01 = abs_sector_cursor + r.index01_within_bin;
 
@@ -193,7 +204,9 @@ pub fn parse_cue(cue_path: &Path) -> Vec<Track> {
 
 fn msf_to_sectors(s: &str) -> Option<u64> {
     let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() != 3 { return None; }
+    if parts.len() != 3 {
+        return None;
+    }
     let m: u64 = parts[0].parse().ok()?;
     let s2: u64 = parts[1].parse().ok()?;
     let f: u64 = parts[2].parse().ok()?;
@@ -210,7 +223,13 @@ fn extract_quoted(line: &str) -> Option<&str> {
 /// Used to compare filenames that may differ in Unicode encoding/normalization.
 fn ascii_fold(s: &str) -> String {
     s.chars()
-        .filter_map(|c| if c.is_ascii() { Some(c.to_ascii_lowercase()) } else { None })
+        .filter_map(|c| {
+            if c.is_ascii() {
+                Some(c.to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -219,7 +238,8 @@ fn track_num_from_name(s: &str) -> Option<u32> {
     let lower = s.to_lowercase();
     let pos = lower.find("track")?;
     let rest = lower[pos + 5..].trim_start_matches(|c: char| !c.is_ascii_digit());
-    rest.chars().take_while(|c| c.is_ascii_digit())
+    rest.chars()
+        .take_while(|c| c.is_ascii_digit())
         .collect::<String>()
         .parse()
         .ok()
