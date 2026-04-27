@@ -1,3 +1,5 @@
+## CD+G Player
+
 A CD+G and CD+EG karaoke disc player for use with redump-style multi-.bin + .cue + .cdg
 
 Supports exporting by track to av1 (video) + flac (audio) in an mkv container.
