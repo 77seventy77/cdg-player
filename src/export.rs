@@ -165,8 +165,10 @@ fn run_export(
         .find(|candidate| candidate.is_file())
         .cloned()
         .unwrap_or_else(|| PathBuf::from(ffmpeg_binary_name()));
+    let video_encoder = choose_av1_encoder(&ffmpeg);
 
     let mut command = Command::new(&ffmpeg);
+    let video_args = video_encoder.ffmpeg_args();
     command
         .args([
             "-y",
@@ -186,20 +188,13 @@ fn run_export(
             "0:v", // explicitly map video stream
             "-map",
             "1:a", // explicitly map audio stream
-            "-c:v",
-            "libsvtav1",
-            "-crf",
-            "30",
-            "-b:v",
-            "0",
-            "-preset",
-            "6",
             "-c:a",
             "flac",
             "-compression_level",
             "8",
-            out_path.to_string_lossy().as_ref(),
         ])
+        .args(video_args)
+        .arg(out_path.to_string_lossy().as_ref())
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -310,6 +305,50 @@ fn sanitize_output_stem(stem: &str) -> String {
         "Track".to_string()
     } else {
         sanitized
+    }
+}
+
+enum Av1Encoder {
+    SvtAv1,
+    AomAv1,
+}
+
+impl Av1Encoder {
+    fn ffmpeg_args(&self) -> [&'static str; 8] {
+        match self {
+            Av1Encoder::SvtAv1 => ["-c:v", "libsvtav1", "-crf", "30", "-b:v", "0", "-preset", "6"],
+            Av1Encoder::AomAv1 => [
+                "-c:v",
+                "libaom-av1",
+                "-crf",
+                "30",
+                "-b:v",
+                "0",
+                "-cpu-used",
+                "6",
+            ],
+        }
+    }
+}
+
+fn choose_av1_encoder(ffmpeg: &Path) -> Av1Encoder {
+    let output = Command::new(ffmpeg)
+        .args(["-hide_banner", "-encoders"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+
+    let Ok(output) = output else {
+        return Av1Encoder::SvtAv1;
+    };
+
+    let encoders = String::from_utf8_lossy(&output.stdout);
+    if encoders.contains(" libsvtav1 ") {
+        Av1Encoder::SvtAv1
+    } else if encoders.contains(" libaom-av1 ") {
+        Av1Encoder::AomAv1
+    } else {
+        Av1Encoder::SvtAv1
     }
 }
 
