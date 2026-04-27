@@ -307,8 +307,16 @@ fn find_ffmpeg() -> PathBuf {
         }
     }
 
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            let candidate = dir.join(ffmpeg_binary_name());
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+
     for candidate in ffmpeg_fallback_locations() {
-        let candidate = PathBuf::from(candidate);
         if candidate.is_file() {
             return candidate;
         }
@@ -328,26 +336,61 @@ fn ffmpeg_binary_name() -> &'static str {
     }
 }
 
-fn ffmpeg_fallback_locations() -> &'static [&'static str] {
+fn ffmpeg_fallback_locations() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        &[
+        vec![
             "/opt/homebrew/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
             "/opt/local/bin/ffmpeg",
         ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
     }
     #[cfg(target_os = "windows")]
     {
-        &[]
+        let mut candidates = Vec::new();
+
+        if let Some(program_data) = std::env::var_os("ProgramData") {
+            candidates.push(
+                PathBuf::from(program_data)
+                    .join("chocolatey")
+                    .join("bin")
+                    .join("ffmpeg.exe"),
+            );
+        }
+
+        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+            candidates.push(
+                PathBuf::from(&user_profile)
+                    .join("scoop")
+                    .join("shims")
+                    .join("ffmpeg.exe"),
+            );
+            candidates.push(
+                PathBuf::from(user_profile)
+                    .join("AppData")
+                    .join("Local")
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links")
+                    .join("ffmpeg.exe"),
+            );
+        }
+
+        candidates
     }
     #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     {
-        &[
+        vec![
             "/usr/local/bin/ffmpeg",
             "/usr/bin/ffmpeg",
             "/snap/bin/ffmpeg",
         ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
     }
 }
 
