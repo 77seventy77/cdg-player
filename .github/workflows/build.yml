@@ -122,19 +122,32 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      # Release rule: before pushing a new version to GitHub, always refresh
+      # Windows bundling against the latest available ffmpeg package rather than
+      # relying on an older cached binary or previously bundled copy.
+      # Use the full build here because export depends on libsvtav1, which may
+      # be absent from the lighter essentials package.
       - name: Install ffmpeg
         shell: pwsh
         run: |
-          choco install ffmpeg --yes --no-progress
+          choco install ffmpeg-full --yes --no-progress
           New-Item -ItemType Directory -Force -Path bundle | Out-Null
 
-          $ffmpegRoot = "C:\ProgramData\chocolatey\lib\ffmpeg\tools"
-          $ffmpegExe = Get-ChildItem $ffmpegRoot -Recurse -Filter ffmpeg.exe -File |
+          $ffmpegRoot = Get-ChildItem "C:\ProgramData\chocolatey\lib" -Directory |
+            Where-Object { $_.Name -like "ffmpeg-full*" } |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if (-not $ffmpegRoot) {
+            throw "Could not locate the installed ffmpeg-full package directory"
+          }
+
+          $ffmpegTools = Join-Path $ffmpegRoot "tools"
+          $ffmpegExe = Get-ChildItem $ffmpegTools -Recurse -Filter ffmpeg.exe -File |
             Where-Object { $_.FullName -match '\\bin\\ffmpeg\.exe$' } |
             Select-Object -First 1 -ExpandProperty FullName
 
           if (-not $ffmpegExe) {
-            $ffmpegExe = Get-ChildItem $ffmpegRoot -Recurse -Filter ffmpeg.exe -File |
+            $ffmpegExe = Get-ChildItem $ffmpegTools -Recurse -Filter ffmpeg.exe -File |
               Select-Object -First 1 -ExpandProperty FullName
           }
 
