@@ -1,6 +1,7 @@
 /// Export CD+G / CD+EG tracks to MKV files with AV1 video and FLAC audio.
 ///
-/// Requires ffmpeg (with libsvtav1) to be installed and on PATH.
+/// Requires ffmpeg with libsvtav1 support, either bundled with the app or
+/// installed on the system.
 /// Video is rendered at 30 fps (every 10 CDG packets at 300 pps).
 /// Each track is exported as its own MKV in the chosen output directory,
 /// paired with its own audio so picture and audio stay in sync.
