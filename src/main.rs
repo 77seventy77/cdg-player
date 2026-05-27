@@ -45,19 +45,16 @@ struct Player {
     pub is_cdeg: bool,
     /// Which of the 16 tile channels are present on this disc.
     pub channels_present: [bool; 16],
+    /// True when playing audio with no CDG graphics available.
+    pub is_audio_only: bool,
 }
 
 impl Player {
-    fn new(track: &cue::Track, cdg_path: &PathBuf, cdeg_enabled: bool) -> Self {
-        let cdg_raw = std::fs::read(cdg_path).unwrap_or_default();
-        let cdg_offset = track.cdg_offset() as usize;
-        // Limit CDG data to this track's sectors only (4 packets × 24 bytes each).
-        let cdg_end =
-            (cdg_offset + track.sectors as usize * 4 * cdg::PACKET_SIZE).min(cdg_raw.len());
-        let cdg_data = &cdg_raw[cdg_offset.min(cdg_raw.len())..cdg_end];
-        let packets: Vec<_> = PacketIter::new(cdg_data).collect();
+    /// Create a player with pre-loaded CDG bytes (from file or ZIP, per-track or monolithic).
+    fn new(track: &cue::Track, cdg_bytes: Vec<u8>, cdeg_enabled: bool) -> Self {
+        let packets: Vec<_> = PacketIter::new(&cdg_bytes).collect();
         let total = packets.len();
-        let disc_channels = channels_present(cdg_data);
+        let disc_channels = channels_present(&cdg_bytes);
 
         // Auto-detect whether this disc has any CD+EG (Item 2) data.
         let has_cdeg = packets
@@ -81,6 +78,7 @@ impl Player {
             audio_samples,
             is_cdeg: has_cdeg,
             channels_present: disc_channels,
+            is_audio_only: false,
         }
     }
 
@@ -106,6 +104,7 @@ impl Player {
             audio_samples,
             is_cdeg: false,
             channels_present: [false; 16],
+            is_audio_only: true,
         }
     }
 
@@ -224,7 +223,10 @@ struct App {
     library: Vec<DiscEntry>,
     player: Option<Player>,
     tracks: Vec<cue::Track>,
+    /// Monolithic CDG file path (filesystem discs).
     cdg_path: Option<PathBuf>,
+    /// Monolithic CDG inside a STORE ZIP (no extraction needed).
+    global_cdg_zip: Option<cue::ZipEntry>,
     track_idx: usize,
     texture: Option<TextureHandle>,
     volume: f32,
@@ -234,7 +236,7 @@ struct App {
     cdeg_enabled: bool,
     /// Which of the 16 tile channels are active for playback and export.
     active_channels: [bool; 16],
-    /// Temp directory created when a disc was loaded from a ZIP.
+    /// Temp directory created when a disc was loaded from a 7z archive.
     /// Deleted when a new disc is loaded or the app exits.
     zip_temp_dir: Option<PathBuf>,
     /// Error message to display in the central panel (dismissed on next open).
@@ -269,6 +271,7 @@ impl App {
             player: None,
             tracks: vec![],
             cdg_path: None,
+            global_cdg_zip: None,
             track_idx: 0,
             texture: None,
             volume: 1.0,
@@ -324,11 +327,13 @@ impl App {
 
     fn open_zip(&mut self, zip_path: PathBuf) {
         self.open_error = None;
-        match extract_disc_zip(&zip_path) {
-            Ok((temp_dir, cue_path)) => {
+        match open_zip_no_extract(&zip_path) {
+            Ok((tracks, cdg_path, global_cdg_zip)) => {
                 self.cleanup_zip_temp();
-                self.zip_temp_dir = Some(temp_dir);
-                self.load_cue(cue_path);
+                self.tracks = tracks;
+                self.cdg_path = cdg_path;
+                self.global_cdg_zip = global_cdg_zip;
+                self.finish_disc_load();
             }
             Err(e) => {
                 self.open_error = Some(e);
@@ -351,7 +356,7 @@ impl App {
     }
 
     fn load_cue(&mut self, cue_path: PathBuf) {
-        // If we're loading a plain .cue (not from a ZIP), drop any previous temp dir.
+        // If we're loading a plain .cue (not from a 7z temp dir), drop any temp dir.
         if self
             .zip_temp_dir
             .as_ref()
@@ -360,13 +365,19 @@ impl App {
             self.cleanup_zip_temp();
         }
 
-        let cdg = cue_path.with_extension("cdg");
-        let cdg_path = {
-            // Resolve the CDG path, then discard it if the file is empty.
+        self.tracks = cue::parse_cue(&cue_path);
+        self.global_cdg_zip = None;
+
+        // Per-track CDG discs have a .cdg file alongside each .bin.
+        // Only search for a monolithic CDG if no per-track CDGs were found.
+        let has_per_track_cdg = self.tracks.iter().any(|t| t.cdg_path.is_some());
+        self.cdg_path = if has_per_track_cdg {
+            None
+        } else {
+            let cdg = cue_path.with_extension("cdg");
             let candidate = if cdg.exists() {
                 Some(cdg)
             } else {
-                // CDG file name doesn't match the cue — find any .cdg in the same folder.
                 cue_path.parent().and_then(|dir| {
                     std::fs::read_dir(dir)
                         .ok()?
@@ -383,28 +394,38 @@ impl App {
             candidate.filter(|p| p.metadata().map(|m| m.len() > 0).unwrap_or(false))
         };
 
-        self.cdg_path = cdg_path;
-        self.tracks = cue::parse_cue(&cue_path);
+        self.finish_disc_load();
+    }
+
+    /// Shared post-load setup called after tracks + CDG sources are set.
+    fn finish_disc_load(&mut self) {
         self.track_idx = 0;
         self.player = None;
         self.texture = None;
 
         // Scan track 0 to find which channels are present, then set defaults:
         // enable 0 & 1 if both exist, otherwise enable 0 only.
-        let disc_ch = if let (Some(cdg_path), Some(track)) =
-            (&self.cdg_path, self.tracks.first())
-        {
-            std::fs::read(cdg_path)
-                .map(|raw| {
-                    let off = track.cdg_offset() as usize;
-                    let end =
-                        (off + track.sectors as usize * 4 * cdg::PACKET_SIZE).min(raw.len());
-                    channels_present(&raw[off.min(raw.len())..end])
-                })
-                .unwrap_or([false; 16])
-        } else {
-            [false; 16]
-        };
+        let disc_ch = self.tracks.first().map(|track| {
+            let bytes = track.read_cdg(None, self.global_cdg_zip.as_ref());
+            if bytes.is_empty() {
+                // Monolithic file: read first track's slice.
+                if let Some(ref p) = self.cdg_path {
+                    return std::fs::read(p)
+                        .map(|raw| {
+                            let off = track.cdg_offset() as usize;
+                            let end = (off + track.sectors as usize
+                                * cue::CDG_BYTES_PER_SECTOR)
+                                .min(raw.len());
+                            channels_present(&raw[off.min(raw.len())..end])
+                        })
+                        .unwrap_or([false; 16]);
+                }
+                [false; 16]
+            } else {
+                channels_present(&bytes)
+            }
+        }).unwrap_or([false; 16]);
+
         let mut active = [false; 16];
         active[0] = true;
         if disc_ch[0] && disc_ch[1] {
@@ -421,13 +442,22 @@ impl App {
         };
         self.track_idx = idx;
 
-        if let Some(ref cdg) = self.cdg_path {
-            let mut player = Player::new(track, cdg, self.cdeg_enabled);
+        let has_global = self.cdg_path.is_some() || self.global_cdg_zip.is_some();
+        if track.has_cdg(has_global) {
+            // Pre-load CDG bytes for this track from whichever source is available.
+            let cdg_bytes = if let Some(ref p) = self.cdg_path {
+                // Monolithic file: read once, slice per track.
+                std::fs::read(p)
+                    .map(|raw| track.read_cdg(Some(&raw), None))
+                    .unwrap_or_default()
+            } else {
+                track.read_cdg(None, self.global_cdg_zip.as_ref())
+            };
+            let mut player = Player::new(track, cdg_bytes, self.cdeg_enabled);
             player.screen.active_channels = self.active_channels;
             player.sink.set_volume(self.volume);
             self.player = Some(player);
         } else {
-            // No .cdg — audio-only player (no video packets).
             let mut player = Player::audio_only(track, self.cdeg_enabled);
             player.screen.active_channels = self.active_channels;
             player.sink.set_volume(self.volume);
@@ -442,6 +472,7 @@ impl App {
         self.player = None;
         self.tracks = vec![];
         self.cdg_path = None;
+        self.global_cdg_zip = None;
         self.texture = None;
         self.cleanup_zip_temp();
     }
@@ -507,7 +538,10 @@ impl eframe::App for App {
                         .as_deref(),
                     Some(ExportState::Running { .. })
                 );
-                let can_export = !self.tracks.is_empty() && self.cdg_path.is_some();
+                let has_cdg = self.cdg_path.is_some()
+                    || self.global_cdg_zip.is_some()
+                    || self.tracks.iter().any(|t| t.cdg_path.is_some() || t.cdg_zip.is_some());
+                let can_export = !self.tracks.is_empty() && has_cdg;
 
                 if in_library {
                     let total_w = measure_btn("Open") + sp + measure_btn("Set Library");
@@ -582,12 +616,7 @@ impl eframe::App for App {
                             .as_ref()
                             .map(|p| p.screen.cdeg_enabled)
                             .unwrap_or(self.cdeg_enabled);
-                        let disc_title = self
-                            .cdg_path
-                            .as_ref()
-                            .and_then(|p| p.file_stem())
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "Disc".to_string());
+                        let disc_title = disc_title_for(&self.cdg_path, &self.tracks);
 
                         if !self.tracks.is_empty() {
                             let track_label =
@@ -642,7 +671,8 @@ impl eframe::App for App {
                                     let track = self.tracks[self.track_idx].clone();
                                     let (prog, cancel) = export::export_all_async(
                                         vec![track],
-                                        self.cdg_path.clone().unwrap(),
+                                        self.cdg_path.clone(),
+                                        self.global_cdg_zip.clone(),
                                         cdeg_on,
                                         self.active_channels,
                                         dir,
@@ -669,7 +699,8 @@ impl eframe::App for App {
                                     }
                                     let (prog, cancel) = export::export_all_async(
                                         self.tracks.clone(),
-                                        self.cdg_path.clone().unwrap(),
+                                        self.cdg_path.clone(),
+                                        self.global_cdg_zip.clone(),
                                         cdeg_on,
                                         album_channels,
                                         dir,
@@ -1028,7 +1059,7 @@ impl eframe::App for App {
                                 .color(egui::Color32::from_rgb(220, 80, 80)),
                         );
                     });
-                } else if self.player.is_some() && self.cdg_path.is_none() {
+                } else if self.player.as_ref().map_or(false, |p| p.is_audio_only) {
                     // ── Audio-only (no .cdg) ───────────────────────────────
                     let avail = ui.available_size();
                     ui.allocate_ui_with_layout(avail, egui::Layout::top_down(egui::Align::Center), |ui| {
@@ -1237,66 +1268,89 @@ fn sanitize_cue(content: &[u8]) -> Vec<u8> {
     result.into_bytes()
 }
 
-/// Extract disc-relevant files (.cue, .bin, .cdg) from a ZIP archive into a
-/// temporary directory.  Works for both regular ZIPs and TorrentZip (STORED).
-/// Returns `(temp_dir, cue_path)` on success.
-fn extract_disc_zip(zip_path: &Path) -> Result<(PathBuf, PathBuf), String> {
+/// Open a STORE-only ZIP disc image without extracting any files.
+///
+/// Scans the archive to build a map of filename → byte offset within the ZIP,
+/// reads the .cue text in-memory, and uses `cue::parse_cue_from_zip` to build
+/// tracks that seek directly into the ZIP for audio and CDG data.
+///
+/// Returns `(tracks, monolithic_cdg_path=None, global_cdg_zip)`.
+fn open_zip_no_extract(
+    zip_path: &Path,
+) -> Result<(Vec<cue::Track>, Option<PathBuf>, Option<cue::ZipEntry>), String> {
+    use std::collections::HashMap;
     use std::io::Read;
 
     let file = std::fs::File::open(zip_path).map_err(|e| format!("Cannot open ZIP: {e}"))?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid ZIP file: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Invalid ZIP file: {e}"))?;
 
-    // Unique temp dir per process so concurrent launches don't collide.
-    let temp_dir = std::env::temp_dir().join(format!("cdg-player-{}", std::process::id()));
-    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("Cannot create temp dir: {e}"))?;
-
-    let mut cue_path: Option<PathBuf> = None;
+    // ascii-folded filename (no directory prefix) → (data_start, data_size)
+    let mut entry_map: HashMap<String, (u64, u64)> = HashMap::new();
+    let mut cue_text: Option<String> = None;
 
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("ZIP entry error: {e}"))?;
 
-        // Skip directories and files we don't care about.
         let name = entry.name().to_string();
         let lower = name.to_ascii_lowercase();
-        if !lower.ends_with(".cue") && !lower.ends_with(".bin") && !lower.ends_with(".cdg") {
+        if entry.is_dir()
+            || (!lower.ends_with(".cue")
+                && !lower.ends_with(".bin")
+                && !lower.ends_with(".cdg"))
+        {
             continue;
         }
 
-        // Reject compressed entries.
         if entry.compression() != zip::CompressionMethod::Stored {
             return Err("CD+G Player supports uncompressed archives only.".to_string());
         }
 
-        let file_name = Path::new(&name)
+        // Use only the final filename component (strip any directory prefix).
+        let filename = Path::new(&name)
             .file_name()
-            .ok_or_else(|| format!("Bad entry name: {name}"))?
-            .to_string_lossy();
-
-        let mut buf = Vec::with_capacity(entry.size() as usize);
-        entry
-            .read_to_end(&mut buf)
-            .map_err(|e| format!("Failed to read {name} from ZIP: {e}"))?;
-
-        // Sanitize the on-disk filename and rewrite .cue FILE refs to match.
-        let sanitized = sanitize_filename(&file_name);
-        let out_path = temp_dir.join(&sanitized);
-        let data = if lower.ends_with(".cue") {
-            sanitize_cue(&buf)
-        } else {
-            buf
-        };
-        std::fs::write(&out_path, &data).map_err(|e| format!("Failed to write {name}: {e}"))?;
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.clone());
 
         if lower.ends_with(".cue") {
-            cue_path = Some(out_path);
+            let mut buf = Vec::new();
+            entry
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("Cannot read .cue from ZIP: {e}"))?;
+            // Rewrite FILE references to use ASCII-only filenames so they
+            // match the ascii-folded entry_map keys used in parse_cue_from_zip.
+            let sanitized = String::from_utf8_lossy(&sanitize_cue(&buf)).into_owned();
+            cue_text = Some(sanitized);
+        } else {
+            let data_start = entry.data_start();
+            let data_size = entry.size();
+            let key = cue::ascii_fold(&filename);
+            entry_map.insert(key, (data_start, data_size));
         }
     }
 
-    let cue =
-        cue_path.ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
-    Ok((temp_dir, cue))
+    let cue_text = cue_text
+        .ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
+
+    let tracks = cue::parse_cue_from_zip(&cue_text, zip_path, &entry_map);
+
+    // If no track has a per-track CDG, look for a monolithic CDG entry.
+    let global_cdg_zip = if tracks.iter().any(|t| t.cdg_zip.is_some()) {
+        None
+    } else {
+        entry_map
+            .iter()
+            .find(|(k, _)| k.ends_with(".cdg"))
+            .map(|(_, &(ds, sz))| cue::ZipEntry {
+                zip_path: zip_path.to_path_buf(),
+                data_start: ds,
+                data_size: sz,
+            })
+    };
+
+    Ok((tracks, None, global_cdg_zip))
 }
 
 /// Extract disc files from a 7z archive (STORE or any supported method).
@@ -1382,6 +1436,36 @@ fn extract_disc_7z(path: &Path) -> Result<(PathBuf, PathBuf), String> {
     let cue =
         cue_path.ok_or_else(|| "CD+G Player requires a disc image to have a .cue.".to_string())?;
     Ok((temp_dir, cue))
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+/// Derive a display title for the currently loaded disc.
+/// Uses the monolithic CDG stem for monolithic discs, or strips the
+/// " (Track NN)" suffix from the first track's CDG stem for per-track discs.
+fn disc_title_for(cdg_path: &Option<PathBuf>, tracks: &[cue::Track]) -> String {
+    if let Some(p) = cdg_path {
+        return p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Disc".to_string());
+    }
+    // Per-track: strip " (Track NN)" from the first track's CDG or bin stem.
+    if let Some(track) = tracks.first() {
+        let stem_path: &Path = track.cdg_path.as_deref()
+            .or(track.bin_path.as_deref())
+            .unwrap_or(Path::new(""));
+        let stem = stem_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Disc".to_string());
+        let lower = stem.to_lowercase();
+        if let Some(pos) = lower.rfind(" (track") {
+            return stem[..pos].trim().to_string();
+        }
+        return stem;
+    }
+    "Disc".to_string()
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────

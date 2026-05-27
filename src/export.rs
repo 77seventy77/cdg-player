@@ -21,7 +21,6 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub const EXPORT_FPS: u32 = 30;
 const PACKETS_PER_FRAME: usize = (300 / EXPORT_FPS) as usize; // 10
-const CDG_BYTES_PER_SECTOR: usize = 96; // 4 packets × 24 bytes
 
 /// Progress shared between the export thread and the UI.
 pub type Progress = Arc<Mutex<ExportState>>;
@@ -49,7 +48,8 @@ pub enum ExportState {
 /// Returns a `(Progress, CancelToken)` pair — set the token to cancel.
 pub fn export_all_async(
     tracks: Vec<Track>,
-    cdg_path: PathBuf,
+    global_cdg: Option<PathBuf>,
+    global_cdg_zip: Option<crate::cue::ZipEntry>,
     cdeg_enabled: bool,
     active_channels: [bool; 16],
     output_dir: PathBuf,
@@ -66,12 +66,19 @@ pub fn export_all_async(
 
     std::thread::spawn(move || {
         let total = tracks.len();
-        let cdg_raw = match std::fs::read(&cdg_path) {
-            Ok(b) => b,
-            Err(e) => {
-                *prog.lock().unwrap() = ExportState::Error(format!("Cannot read CDG: {e}"));
-                return;
+
+        // Pre-load monolithic CDG file bytes once (for monolithic-file discs).
+        let global_cdg_raw: Option<Vec<u8>> = if let Some(ref path) = global_cdg {
+            match std::fs::read(path) {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    *prog.lock().unwrap() =
+                        ExportState::Error(format!("Cannot read CDG: {e}"));
+                    return;
+                }
             }
+        } else {
+            None
         };
 
         for (idx, track) in tracks.iter().enumerate() {
@@ -86,12 +93,12 @@ pub fn export_all_async(
                 frame_frac: 0.0,
             };
 
-            // Slice CDG data for this track only.
-            let cdg_start = track.cdg_offset() as usize;
-            let cdg_end =
-                (cdg_start + track.sectors as usize * CDG_BYTES_PER_SECTOR).min(cdg_raw.len());
-            let cdg_data = &cdg_raw[cdg_start.min(cdg_raw.len())..cdg_end];
-            let packets: Vec<_> = PacketIter::new(cdg_data).collect();
+            // Read CDG bytes via Track's unified source (per-track ZIP/file or monolithic).
+            let cdg_bytes = track.read_cdg(global_cdg_raw.as_deref(), global_cdg_zip.as_ref());
+            if cdg_bytes.is_empty() {
+                continue; // no CDG for this track — skip
+            }
+            let packets: Vec<_> = PacketIter::new(&cdg_bytes).collect();
 
             // Auto-detect CD+EG for this track.
             let has_cdeg = packets
